@@ -49,9 +49,33 @@ cmake_ninja_workdir = C$:\Users\tetep\Desktop\MyUtils\out\build\x64-Debug\
 
 build cmake_object_order_depends_target_MyUtils: phony || .
 
-build CMakeFiles\MyUtils.dir\src\Network.cpp.obj: CXX_COMPILER__MyUtils_unscanned_Debug C$:\Users\tetep\Desktop\MyUtils\src\Network.cpp || cmake_object_order_depends_target_MyUtils
+build CMakeFiles\MyUtils.dir\cmake_pch.cxx.obj: CXX_COMPILER__MyUtils_unscanned_Debug C$:\Users\tetep\Desktop\MyUtils\out\build\x64-Debug\CMakeFiles\MyUtils.dir\cmake_pch.cxx | CMakeFiles\MyUtils.dir\cmake_pch.hxx || cmake_object_order_depends_target_MyUtils
   CONFIG = Debug
-  FLAGS = /DWIN32 /D_WINDOWS /W3 /GR /EHsc /MDd /Zi /Ob0 /Od /RTC1 -std:c++17
+  FLAGS = /DWIN32 /D_WINDOWS /W3 /GR /EHsc /MDd /Zi /Ob0 /Od /RTC1 -std:c++17 -MDd /YcC:/Users/tetep/Desktop/MyUtils/out/build/x64-Debug/CMakeFiles/MyUtils.dir/cmake_pch.hxx /FpC:/Users/tetep/Desktop/MyUtils/out/build/x64-Debug/CMakeFiles/MyUtils.dir/./cmake_pch.cxx.pch /FIC:/Users/tetep/Desktop/MyUtils/out/build/x64-Debug/CMakeFiles/MyUtils.dir/cmake_pch.hxx
+  INCLUDES = -IC:\Users\tetep\Desktop\MyUtils\include
+  OBJECT_DIR = CMakeFiles\MyUtils.dir
+  OBJECT_FILE_DIR = CMakeFiles\MyUtils.dir
+  TARGET_COMPILE_PDB = CMakeFiles\MyUtils.dir\MyUtils.pdb
+  TARGET_PDB = MyUtils.pdb
+
+
+#############################################
+# Additional output files.
+
+build CMakeFiles\MyUtils.dir\.\cmake_pch.cxx.pch: phony CMakeFiles\MyUtils.dir\cmake_pch.cxx.obj
+
+build CMakeFiles\MyUtils.dir\src\Network.cpp.obj: CXX_COMPILER__MyUtils_unscanned_Debug C$:\Users\tetep\Desktop\MyUtils\src\Network.cpp | CMakeFiles\MyUtils.dir\cmake_pch.hxx CMakeFiles\MyUtils.dir\cmake_pch.cxx.pch || cmake_object_order_depends_target_MyUtils
+  CONFIG = Debug
+  FLAGS = /DWIN32 /D_WINDOWS /W3 /GR /EHsc /MDd /Zi /Ob0 /Od /RTC1 -std:c++17 -MDd /YuC:/Users/tetep/Desktop/MyUtils/out/build/x64-Debug/CMakeFiles/MyUtils.dir/cmake_pch.hxx /FpC:/Users/tetep/Desktop/MyUtils/out/build/x64-Debug/CMakeFiles/MyUtils.dir/./cmake_pch.cxx.pch /FIC:/Users/tetep/Desktop/MyUtils/out/build/x64-Debug/CMakeFiles/MyUtils.dir/cmake_pch.hxx
+  INCLUDES = -IC:\Users\tetep\Desktop\MyUtils\include
+  OBJECT_DIR = CMakeFiles\MyUtils.dir
+  OBJECT_FILE_DIR = CMakeFiles\MyUtils.dir\src
+  TARGET_COMPILE_PDB = CMakeFiles\MyUtils.dir\MyUtils.pdb
+  TARGET_PDB = MyUtils.pdb
+
+build CMakeFiles\MyUtils.dir\src\Memory.cpp.obj: CXX_COMPILER__MyUtils_unscanned_Debug C$:\Users\tetep\Desktop\MyUtils\src\Memory.cpp | CMakeFiles\MyUtils.dir\cmake_pch.hxx CMakeFiles\MyUtils.dir\cmake_pch.cxx.pch || cmake_object_order_depends_target_MyUtils
+  CONFIG = Debug
+  FLAGS = /DWIN32 /D_WINDOWS /W3 /GR /EHsc /MDd /Zi /Ob0 /Od /RTC1 -std:c++17 -MDd /YuC:/Users/tetep/Desktop/MyUtils/out/build/x64-Debug/CMakeFiles/MyUtils.dir/cmake_pch.hxx /FpC:/Users/tetep/Desktop/MyUtils/out/build/x64-Debug/CMakeFiles/MyUtils.dir/./cmake_pch.cxx.pch /FIC:/Users/tetep/Desktop/MyUtils/out/build/x64-Debug/CMakeFiles/MyUtils.dir/cmake_pch.hxx
   INCLUDES = -IC:\Users\tetep\Desktop\MyUtils\include
   OBJECT_DIR = CMakeFiles\MyUtils.dir
   OBJECT_FILE_DIR = CMakeFiles\MyUtils.dir\src
@@ -66,9 +90,9 @@ build CMakeFiles\MyUtils.dir\src\Network.cpp.obj: CXX_COMPILER__MyUtils_unscanne
 #############################################
 # Link the static library MyUtils.lib
 
-build MyUtils.lib: CXX_STATIC_LIBRARY_LINKER__MyUtils_Debug CMakeFiles\MyUtils.dir\src\Network.cpp.obj
+build MyUtils.lib: CXX_STATIC_LIBRARY_LINKER__MyUtils_Debug CMakeFiles\MyUtils.dir\cmake_pch.cxx.obj CMakeFiles\MyUtils.dir\src\Network.cpp.obj CMakeFiles\MyUtils.dir\src\Memory.cpp.obj
   CONFIG = Debug
-  LANGUAGE_COMPILE_FLAGS = /DWIN32 /D_WINDOWS /W3 /GR /EHsc /MDd /Zi /Ob0 /Od /RTC1
+  LANGUAGE_COMPILE_FLAGS = /DWIN32 /D_WINDOWS /W3 /GR /EHsc /MDd /Zi /Ob0 /Od /RTC1 -MDd
   LINK_FLAGS = /machine:x64
   OBJECT_DIR = CMakeFiles\MyUtils.dir
   POST_BUILD = cd .
