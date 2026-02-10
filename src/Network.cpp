@@ -1,7 +1,7 @@
 #include "MyUtils/Network.h"
 #include <iostream>
 
-namespace MyUtils {
+namespace MyUtils::Network {
     void Connector::Init(std::string name) {
         std::cout << "[MyUtils] " << name << " initialized via FetchContent!" << std::endl;
     }

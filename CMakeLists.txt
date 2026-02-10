@@ -1,6 +1,9 @@
 cmake_minimum_required(VERSION 3.14) # FetchContent는 3.11+ 필요
 project(MyUtils)
 
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
 # 1. 라이브러리 생성 (STATIC 추천)
 add_library(MyUtils STATIC
     src/Network.cpp
