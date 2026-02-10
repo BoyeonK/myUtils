@@ -1,8 +1,8 @@
-#include "MyNetLib/Network.h"
+#include "MyUtils/Network.h"
 #include <iostream>
 
 namespace MyNetLib {
     void Connector::Init(std::string name) {
-        std::cout << "[MyNetLib] " << name << " initialized via FetchContent!" << std::endl;
+        std::cout << "[MyUtils] " << name << " initialized via FetchContent!" << std::endl;
     }
 }
