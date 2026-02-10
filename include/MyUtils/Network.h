@@ -1,7 +1,10 @@
 #pragma once
+
 #include <array>
-#include <string>
+#include <iostream>
 #include <memory>
+
+using namespace std;
 
 namespace MyUtils::Network {
 	class SendBuffer;

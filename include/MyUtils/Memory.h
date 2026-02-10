@@ -1,6 +1,14 @@
 #pragma once
+
+#include <iostream>
+#include <vector>
+#include <memory>
+#include <mutex>
+#include <atomic>
 #include <functional>
 #include <utility>
+
+using namespace std;
 
 namespace MyUtils::Memory {
     template <typename T>
