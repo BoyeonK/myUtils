@@ -15,9 +15,7 @@ namespace MyUtils::Network {
 
 		_isOpen = true;
 
-		static MyUtils::Memory::ObjectPool<SendBuffer> sendBufferPool;
-
-		shared_ptr<SendBuffer> SendBufferRef = sendBufferPool.Acquire();
+		shared_ptr<SendBuffer> SendBufferRef = MyUtils::Memory::ObjectPool<SendBuffer>::Acquire();
 		SendBufferRef->Init(shared_from_this(), Index(), allocSize);
 		return SendBufferRef;
 	}
@@ -45,10 +43,8 @@ namespace MyUtils::Network {
 		//구조적으로 SEND_BUFFER_CHUNK크기보다 큰 바이트는 send할 수 없음
 		ASSERT_CRASH(allocSize <= SEND_BUFFER_CHUNK_SIZE);
 
-		static MyUtils::Memory::ObjectPool<SendBufferChunk> sendBufferChunkPool;
-
 		if (LSendBufferChunkRef == nullptr || LSendBufferChunkRef->FreeSize() < allocSize) {
-			shared_ptr<SendBufferChunk> newChunk = sendBufferChunkPool.Acquire();
+			shared_ptr<SendBufferChunk> newChunk = MyUtils::Memory::ObjectPool<SendBufferChunk>::Acquire();
 			LSendBufferChunkRef = newChunk;
 		}
 		ASSERT_CRASH(LSendBufferChunkRef->IsOpen() == false);

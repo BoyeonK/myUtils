@@ -70,27 +70,34 @@ namespace MyUtils::Memory {
     template <typename T>
     class ObjectPool {
     public:
-        ObjectPool(size_t chunkSize = 100) : _chunkSize(chunkSize) {
-            Expand();
+        static ObjectPool& Instance() {
+            static ObjectPool instance;
+            return instance;
         }
 
+        template <typename... Args>
+        static shared_ptr<T> Acquire(Args&&... args) {
+            return Instance().AcquireImpl(forward<Args>(args)...);
+        }
+
+    private:
+        ObjectPool(size_t chunkSize = 100) : _chunkSize(chunkSize) { Expand(); }
         ~ObjectPool() {
             for (T* chunk : _chunks) {
                 ::operator delete(chunk);
             }
         }
 
-        template <typename... Args>
-        shared_ptr<T> Acquire(Args&&... args) {
-            unique_lock<mutex> lock(_lock);
+        ObjectPool(const ObjectPool&) = delete;
+        ObjectPool& operator=(const ObjectPool&) = delete;
 
-            if (_freeList.empty()) {
-                Expand();
-            }
+        template <typename... Args>
+        shared_ptr<T> AcquireImpl(Args&&... args) {
+            unique_lock<mutex> lock(_lock);
+            if (_freeList.empty()) Expand();
 
             T* ptr = _freeList.back();
             _freeList.pop_back();
-
             lock.unlock();
 
             new(ptr) T(forward<Args>(args)...);
@@ -98,16 +105,9 @@ namespace MyUtils::Memory {
             return shared_ptr<T>(ptr, [this](T* p) {
                 p->~T();
                 this->Return(p);
-            });
+                });
         }
 
-        // 현재 가용 개수
-        size_t Size() {
-            lock_guard<mutex> lock(_lock);
-            return _freeList.size();
-        }
-
-    private:
         void Return(T* ptr) {
             lock_guard<mutex> lock(_lock);
             _freeList.push_back(ptr);
@@ -115,16 +115,12 @@ namespace MyUtils::Memory {
 
         void Expand() {
             size_t size = sizeof(T) * _chunkSize;
-			T* newChunk = static_cast<T*>(::operator new(size)); // 생성자 호출 없이 메모리만 chunkSize만큼 할당
-
+            T* newChunk = static_cast<T*>(::operator new(size));
             _chunks.push_back(newChunk);
-
-            for (size_t i = 0; i < _chunkSize; ++i) {
-                _freeList.push_back(newChunk + i); // 포인터 연산
-            }
+            for (size_t i = 0; i < _chunkSize; ++i)
+                _freeList.push_back(newChunk + i);
         }
 
-    private:
         vector<T*> _freeList;
         vector<T*> _chunks;
         size_t _chunkSize;
