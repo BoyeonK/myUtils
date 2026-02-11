@@ -2,7 +2,7 @@
 #include "MyUtils/Thread.h"
 #include "MyUtils/Network.h"
 #include "MyUtils/Actor.h"
-#include "MyUtils/ScheduledActorMessagePoster.h"
+#include "MyUtils/ActorMessageScheduler.h"
 
 namespace MyUtils {
 	//Thread 및 Actor관련
