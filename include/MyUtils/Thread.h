@@ -8,8 +8,8 @@ namespace MyUtils {
 
 		static void InitTLS();
 		static void DestroyTLS() { };
-		static void DoGlobalQueueWork();
-		static void DoTimerQueueDistribution();
+		static void GetRegisteredActorAndProcess();
+		//static void DoTimerQueueDistribution();
 
 		void Launch(function<void()> callback);
 		void Join();

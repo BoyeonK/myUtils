@@ -3,6 +3,8 @@
 #include "MyUtils/Actor.h"
 #include <random>
 
+using namespace std;
+
 namespace MyUtils {
 	ThreadManager::ThreadManager() {
 		InitTLS();
@@ -19,7 +21,7 @@ namespace MyUtils {
 		LRanGen.seed(rd());
 	}
 
-	void ThreadManager::DoGlobalQueueWork()	{
+	void ThreadManager::GetRegisteredActorAndProcess()	{
 		while (LCurrentActor == nullptr) {
 			shared_ptr<Actor> ActorRef;
 			if (GActorQueue->try_dequeue(ActorRef)) {
@@ -33,9 +35,11 @@ namespace MyUtils {
 		}
 	}
 
+	/*
 	void ThreadManager::DoTimerQueueDistribution() {
 
 	}
+	*/
 
 	void ThreadManager::Launch(function<void()> callback) {
 		lock_guard<mutex> guard(_threadManagerLock);
