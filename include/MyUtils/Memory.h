@@ -80,6 +80,10 @@ namespace MyUtils::Memory {
             return Instance().AcquireImpl(forward<Args>(args)...);
         }
 
+        static void ReturnToPool(T* ptr) {
+            Instance().Return(ptr);
+		}
+
     private:
         ObjectPool(size_t chunkSize = 100) : _chunkSize(chunkSize) { Expand(); }
         ~ObjectPool() {

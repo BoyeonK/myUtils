@@ -17,12 +17,14 @@ add_library(MyUtils STATIC
     src/Memory.cpp
     src/Actor.cpp
     src/GlobalVariables.cpp
+    src/ScheduledActorMessagePoster.cpp
 
     include/MyUtils/Network.h
     include/MyUtils/Memory.h
     include/MyUtils/Actor.h
     include/MyUtils/GlobalVariables.h
-)
+    include/MyUtils/ScheduledActorMessagePoster.h
+ "include/MyUtils/Thread.h")
 
 target_precompile_headers(MyUtils PRIVATE src/pch.h)
 

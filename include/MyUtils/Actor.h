@@ -75,8 +75,6 @@ namespace MyUtils {
 		*/
 
 		void ProcessMyMessageBox();
-
-	private:
 		void Push(shared_ptr<Message> message);
 
 	protected:
