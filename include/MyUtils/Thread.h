@@ -1,5 +1,10 @@
 #pragma once
 
+#include <vector>
+#include <thread>
+#include <mutex>
+#include <functional>
+
 namespace MyUtils {
 	class ThreadManager {
 	public:
@@ -15,7 +20,7 @@ namespace MyUtils {
 		void Join();
 
 	private:
-		std::mutex			_threadManagerLock;
-		std::vector<thread>	_threads;
+		std::mutex					_threadManagerLock;
+		std::vector<std::thread>	_threads;
 	};
 }
