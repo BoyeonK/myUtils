@@ -11,7 +11,7 @@ namespace MyUtils {
 		static void GetRegisteredActorAndProcess();
 		//static void DoTimerQueueDistribution();
 
-		void Launch(function<void()> callback);
+		void Launch(std::function<void()> callback);
 		void Join();
 
 	private:
