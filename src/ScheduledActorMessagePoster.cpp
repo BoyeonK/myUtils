@@ -1,4 +1,6 @@
 #include "MyUtils/ScheduledActorMessagePoster.h"
+#include "MyUtils/Memory.h"
+#include "MyUtils/Actor.h"
 #include <chrono>
 
 namespace MyUtils {
