@@ -6,7 +6,7 @@ namespace MyUtils {
 	void Actor::Push(shared_ptr<Message> message) {
 		const int32_t prevCount = _messageCount.fetch_add(1);
 		_messages.Enqueue(message);
-		GActorQueue.enqueue(shared_from_this());
+		GActorQueue->enqueue(shared_from_this());
 	}
 
 	void Actor::ProcessMyMessageBox() {

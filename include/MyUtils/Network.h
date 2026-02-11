@@ -4,12 +4,10 @@
 #include <iostream>
 #include <memory>
 
-using namespace std;
-
 namespace MyUtils::Network {
 	class SendBuffer;
 
-	class SendBufferChunk : public enable_shared_from_this<SendBufferChunk> {
+	class SendBufferChunk : public std::enable_shared_from_this<SendBufferChunk> {
 	public:
 		enum {
 			SEND_BUFFER_CHUNK_SIZE = 6000,
@@ -17,7 +15,7 @@ namespace MyUtils::Network {
 		SendBufferChunk() { Init(); }
 
 		void Init();
-		shared_ptr<SendBuffer> Open(uint32_t allocSize);
+		std::shared_ptr<SendBuffer> Open(uint32_t allocSize);
 		void Close(uint32_t writeSize);
 
 		bool IsOpen() { return _isOpen; };
@@ -26,7 +24,7 @@ namespace MyUtils::Network {
 		uint32_t FreeSize() { return static_cast<uint32_t>(_buffer.size() - _usedSize); }
 
 	private:
-		array<unsigned char, SEND_BUFFER_CHUNK_SIZE> _buffer = {};
+		std::array<unsigned char, SEND_BUFFER_CHUNK_SIZE> _buffer = {};
 		//SendBufferChunk는 TLS로 사용할 것이기 때문에 thread-safe
 		//atomic으로 만들어 줄 필요가 없다.
 		bool _isOpen;
@@ -39,7 +37,7 @@ namespace MyUtils::Network {
 		};
 
 	public:
-		shared_ptr<SendBuffer> Open(uint32_t allockSize);
+		std::shared_ptr<SendBuffer> Open(uint32_t allockSize);
 	};
 
 	class SendBuffer {
@@ -47,7 +45,7 @@ namespace MyUtils::Network {
 		SendBuffer() {}
 		~SendBuffer() {}
 		//나는 SendBuffer를 pool을 통해 관리중이다. 재사용시 초기화 함수
-		void Init(shared_ptr<SendBufferChunk> chunkRef, unsigned char* index, uint32_t allocSize);
+		void Init(std::shared_ptr<SendBufferChunk> chunkRef, unsigned char* index, uint32_t allocSize);
 
 		unsigned char* Buffer() { return _index; }
 		uint32_t AllocSize() { return _allocSize; }
@@ -55,7 +53,7 @@ namespace MyUtils::Network {
 		void Close(uint32_t writeSize);
 
 	private:
-		shared_ptr<SendBufferChunk> _chunkRef;
+		std::shared_ptr<SendBufferChunk> _chunkRef;
 		unsigned char* _index = nullptr;
 
 		//처음 SendBuffer를 생성하면서, 쓰겠다고 선언한 값 (널널하게 부를 수 있다.)
