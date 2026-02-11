@@ -58,15 +58,15 @@ namespace MyUtils {
 			Push(MyUtils::Memory::ObjectPool<Task>::Acquire(ownerWRef, memFunc, std::forward<Args>(args)...));
 		}
 
-		void PostTaskAfter(uint64_t tickAfter, function<void()>&& callback) {
-			shared_ptr<Task> taskRef = MyUtils::Memory::ObjectPool<Task>::Acquire(std::move(callback));
+		void PostTaskAfter(uint64_t tickAfter, std::function<void()>&& callback) {
+			std::shared_ptr<Task> taskRef = MyUtils::Memory::ObjectPool<Task>::Acquire(std::move(callback));
 			GActorMessageScheduler->Reserve(tickAfter, shared_from_this(), taskRef);
 		}
 
 		template<typename T, typename... Args>
 		void PostTaskAfter(uint64_t tickAfter, void(T::* memFunc)(Args...), Args&&... args) {
-			weak_ptr<T> ownerWRef = static_pointer_cast<T>(shared_from_this());
-			shared_ptr<Task> taskRef = MyUtils::Memory::ObjectPool<Task>::Acquire(ownerWRef, memFunc, forward<Args>(args)...);
+			std::weak_ptr<T> ownerWRef = std::static_pointer_cast<T>(shared_from_this());
+			std::shared_ptr<Task> taskRef = MyUtils::Memory::ObjectPool<Task>::Acquire(ownerWRef, memFunc, std::forward<Args>(args)...);
 			GActorMessageScheduler->Reserve(tickAfter, shared_from_this(), taskRef);
 		}
 
