@@ -6,22 +6,29 @@ namespace MyUtils {
 	void Actor::Push(shared_ptr<Message> message) {
 		const int32_t prevCount = _messageCount.fetch_add(1);
 		_messages.Enqueue(message);
-		GActorQueue->enqueue(shared_from_this());
+		bool expected = false;
+		if (_isExecuting.compare_exchange_strong(expected, true))
+			GActorQueue->enqueue(shared_from_this());
 	}
 
 	void Actor::ProcessMyMessageBox() {
 		MyUtils::LCurrentActor = shared_from_this();
-		/*
-		_isExecuting.store(true);
-		shared_ptr<Message> message;
-		while (_messages.Dequeue(message)) {
-			_messageCount.fetch_sub(1);
-			if (message) {
-				message->Process();
-			}
-		}
-		_isExecuting.store(false);
-		LCurrentActor = nullptr;
-		*/
+
+        while (true) {
+            shared_ptr<Message> msg;
+            while (_messages.Dequeue(msg)) {
+                if (msg)
+                    msg->Process();
+            }
+            _isExecuting.store(false);
+            if (!_messages.IsEmpty()) {
+                bool expected = false;
+                if (_isExecuting.compare_exchange_strong(expected, true))
+                    continue;
+            }
+            break;
+        }
+
+        MyUtils::LCurrentActor = nullptr;
 	}
 }
