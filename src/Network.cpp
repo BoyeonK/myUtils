@@ -1,9 +1,8 @@
+#include "MyUtils/GlobalVariables.h"
 #include "MyUtils/Network.h"
 #include "MyUtils/Memory.h"
 
 namespace MyUtils::Network {
-	thread_local shared_ptr<SendBufferChunk> LSendBufferChunkRef = nullptr;
-
 	void SendBufferChunk::Init() {
 		_isOpen = false;
 		_usedSize = 0;
