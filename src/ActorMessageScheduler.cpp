@@ -4,7 +4,7 @@
 #include <chrono>
 
 namespace MyUtils {
-    void ActorEventScheduler::Reserve(uint64_t tickAfter, weak_ptr<Actor> owner, shared_ptr<Message> message) {
+    void ActorMessageScheduler::Reserve(uint64_t tickAfter, weak_ptr<Actor> owner, shared_ptr<Message> message) {
         using namespace std::chrono;
         const uint64_t postTick = duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count() + tickAfter;
 
@@ -13,7 +13,7 @@ namespace MyUtils {
         _toBeAddedMessages.push_back(TimerMessage{ postTick, msgRef });
     }
 
-    void ActorEventScheduler::AddAndDistribute(uint64_t now) {
+    void ActorMessageScheduler::AddAndDistribute(uint64_t now) {
         {
             lock_guard<mutex> lock(_addLock);
             for (const TimerMessage& timerMessage : _toBeAddedMessages) {
@@ -39,7 +39,7 @@ namespace MyUtils {
         }
     }
 
-    void ActorEventScheduler::Clear() {
+    void ActorMessageScheduler::Clear() {
         {
             lock_guard<mutex> lock(_addLock);
             _toBeAddedMessages.clear();

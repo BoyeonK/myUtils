@@ -1,5 +1,6 @@
 #include "MyUtils/Thread.h"
 #include "MyUtils/GlobalVariables.h"
+#include "MyUtils/ActorMessageScheduler.h"
 #include "MyUtils/Actor.h"
 #include <random>
 
@@ -35,11 +36,11 @@ namespace MyUtils {
 		}
 	}
 
-	/*
-	void ThreadManager::DoTimerQueueDistribution() {
-
+	void ThreadManager::DistributeOnTimeActorMessages() {
+		using namespace std::chrono;
+		const uint64_t now = duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
+		GActorMessageScheduler->AddAndDistribute(now);
 	}
-	*/
 
 	void ThreadManager::Launch(function<void()> callback) {
 		lock_guard<mutex> guard(_threadManagerLock);

@@ -7,14 +7,14 @@ namespace MyUtils {
 	//전방 선언띠
 	class Actor;
 	class ThreadManager;
-	class ActorEventScheduler;
+	class ActorMessageScheduler;
 	namespace Network { class SendBufferChunk; class SendBufferManager; }
 
 	//Thread 및 Actor관련
 	extern class ThreadManager* GThreadManager;
 	using GlobalQueueType = moodycamel::ConcurrentQueue<std::shared_ptr<MyUtils::Actor>>;
 	extern GlobalQueueType* GActorQueue;
-	extern class ActorEventScheduler* GActorEventScheduler;
+	extern class ActorMessageScheduler* GActorMessageScheduler;
 	extern thread_local std::shared_ptr<MyUtils::Actor> LCurrentActor;
 	extern thread_local uint32_t MyThreadID;
 	extern thread_local uint64_t LEndTickCount;

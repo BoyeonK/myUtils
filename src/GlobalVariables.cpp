@@ -8,7 +8,7 @@ namespace MyUtils {
 	//Thread 및 Actor관련
 	class ThreadManager* GThreadManager = nullptr;
 	GlobalQueueType* GActorQueue = nullptr;
-	class ActorEventScheduler* GActorEventScheduler = nullptr;
+	class ActorMessageScheduler* GActorMessageScheduler = nullptr;
 	thread_local shared_ptr<MyUtils::Actor> LCurrentActor = nullptr;
 	thread_local uint32_t MyThreadID = 0;
 	thread_local uint64_t LEndTickCount = 0;
@@ -26,14 +26,14 @@ namespace MyUtils {
 			GThreadManager = new ThreadManager();
 			GSendBufferManager = new Network::SendBufferManager();
 			GActorQueue = new GlobalQueueType();
-			GActorEventScheduler = new ActorEventScheduler();
+			GActorMessageScheduler = new ActorMessageScheduler();
 		}
 
 		~CoreGlobal() {
 			delete GThreadManager;
 			delete GSendBufferManager;
 			delete GActorQueue;
-			delete GActorEventScheduler;
+			delete GActorMessageScheduler;
 		}
 	} GCoreGlobal;
 }

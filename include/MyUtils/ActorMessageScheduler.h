@@ -28,7 +28,7 @@ namespace MyUtils {
         std::shared_ptr<ScheduledMessage> messageRef;
     };
 
-    class ActorEventScheduler {
+    class ActorMessageScheduler {
     public:
         void Reserve(uint64_t tickAfter, std::weak_ptr<Actor> owner, std::shared_ptr<Message> message);
         void AddAndDistribute(uint64_t now);

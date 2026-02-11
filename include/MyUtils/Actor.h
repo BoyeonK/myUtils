@@ -4,6 +4,8 @@
 #include <tuple>
 #include <utility>
 #include <functional>
+#include "MyUtils/ActorMessageScheduler.h"
+#include "MyUtils/GlobalVariables.h"
 #include "MyUtils/Memory.h"
 
 namespace MyUtils {
@@ -56,21 +58,17 @@ namespace MyUtils {
 			Push(MyUtils::Memory::ObjectPool<Task>::Acquire(ownerWRef, memFunc, std::forward<Args>(args)...));
 		}
 
-		/*
 		void PostTaskAfter(uint64_t tickAfter, function<void()>&& callback) {
 			shared_ptr<Task> taskRef = MyUtils::Memory::ObjectPool<Task>::Acquire(std::move(callback));
-			GActorEventScheduler->Reserve(tickAfter, shared_from_this(), taskRef);
+			GActorMessageScheduler->Reserve(tickAfter, shared_from_this(), taskRef);
 		}
-		*/
 
-		/*
 		template<typename T, typename... Args>
 		void PostTaskAfter(uint64_t tickAfter, void(T::* memFunc)(Args...), Args&&... args) {
 			weak_ptr<T> ownerWRef = static_pointer_cast<T>(shared_from_this());
 			shared_ptr<Task> taskRef = MyUtils::Memory::ObjectPool<Task>::Acquire(ownerWRef, memFunc, forward<Args>(args)...);
-			GActorEventScheduler->Reserve(tickAfter, shared_from_this(), taskRef);
+			GActorMessageScheduler->Reserve(tickAfter, shared_from_this(), taskRef);
 		}
-		*/
 
 		void ProcessMyMessageBox();
 		void Push(std::shared_ptr<Message> message);
