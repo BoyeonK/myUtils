@@ -7,6 +7,7 @@
 #include <functional>
 #include <utility>
 #include <new>
+#include "concurrentqueue.h"
 
 namespace MyUtils::Memory {
     template <typename T>
@@ -15,7 +16,7 @@ namespace MyUtils::Memory {
         static constexpr int BATCH_SIZE = 500;
         static constexpr int MAX_LOCAL_SIZE = 2000;
 
-        // (순수 정적 클래스 의도)
+        // 인스턴스 생성 금지
         ObjectPool() = delete;
         ~ObjectPool() = delete;
 
@@ -68,16 +69,6 @@ namespace MyUtils::Memory {
             }
         }
 
-        static std::vector<T*>& GetGlobalPool() {
-            static std::vector<T*> _globalPool;
-            return _globalPool;
-        }
-
-        static std::mutex& GetGlobalLock() {
-            static std::mutex _lock;
-            return _lock;
-        }
-
         static std::vector<T*>& GetLocalPool() {
             thread_local std::vector<T*> _localPool;
             if (_localPool.capacity() < MAX_LOCAL_SIZE) {
@@ -86,26 +77,31 @@ namespace MyUtils::Memory {
             return _localPool;
         }
 
+        static moodycamel::ConcurrentQueue<T*>& GetGlobalPool() {
+            static moodycamel::ConcurrentQueue<T*> _globalPool;
+            return _globalPool;
+        }
+
         static void RefillLocalPool(std::vector<T*>& local) {
-            std::lock_guard<std::mutex> lock(GetGlobalLock());
-            std::vector<T*>& global = GetGlobalPool();
-            int count = 0;
-            while (!global.empty() && count < BATCH_SIZE) {
-                local.push_back(global.back());
-                global.pop_back();
-                count++;
+            auto& global = GetGlobalPool();
+
+            T* buffer[BATCH_SIZE];
+            size_t count = global.try_dequeue_bulk(buffer, BATCH_SIZE);
+
+            if (count > 0) {
+                local.insert(local.end(), buffer, buffer + count);
             }
         }
 
         static void FlushLocalPool(std::vector<T*>& local) {
-            std::lock_guard<std::mutex> lock(GetGlobalLock());
-            std::vector<T*>& global = GetGlobalPool();
-            int count = 0;
-            while (local.size() > (MAX_LOCAL_SIZE - BATCH_SIZE) && count < BATCH_SIZE) {
-                global.push_back(local.back());
-                local.pop_back();
-                count++;
-            }
+            auto& global = GetGlobalPool();
+
+            size_t flushCount = BATCH_SIZE;
+            if (local.size() < BATCH_SIZE) flushCount = local.size();
+
+            auto startIter = local.end() - flushCount;
+            global.enqueue_bulk(startIter, flushCount);
+            local.erase(startIter, local.end());
         }
     };
 
@@ -120,6 +116,7 @@ namespace MyUtils::Memory {
             Node(T&& val) : data(std::move(val)), next(nullptr) {}
             Node(const T& val) : data(val), next(nullptr) {}
         };
+
         using NodePool = ObjectPool<Node>;
 
         MPSCQueue() {
@@ -149,6 +146,7 @@ namespace MyUtils::Memory {
 
             if (next) {
                 outItem = std::move(next->data);
+
                 tail->~Node();
                 NodePool::ReturnRaw(tail);
 
