@@ -9,6 +9,7 @@ namespace MyUtils {
 	class ThreadManager* GThreadManager = nullptr;
 	GlobalQueueType* GActorQueue = nullptr;
 	class ActorMessageScheduler* GActorMessageScheduler = nullptr;
+	thread_local Memory::MPSCQueue<TLTask*> TLTaskQueue;
 	thread_local shared_ptr<MyUtils::Actor> LCurrentActor = nullptr;
 	thread_local uint32_t MyThreadID = 0;
 	thread_local uint64_t LEndTickCount = 0;

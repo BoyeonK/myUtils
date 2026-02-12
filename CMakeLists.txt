@@ -19,6 +19,7 @@ add_library(MyUtils STATIC
     src/GlobalVariables.cpp
     src/ActorMessageScheduler.cpp
     src/Thread.cpp
+    src/ThreadLocalTask.cpp
 
     include/MyUtils/Network.h
     include/MyUtils/Memory.h
@@ -26,6 +27,7 @@ add_library(MyUtils STATIC
     include/MyUtils/GlobalVariables.h
     include/MyUtils/ActorMessageScheduler.h
     include/MyUtils/Thread.h
+    include/MyUtils/ThreadLocalTask.h
 )
 
 target_precompile_headers(MyUtils PRIVATE src/pch.h)

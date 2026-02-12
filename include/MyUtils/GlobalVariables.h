@@ -1,7 +1,9 @@
 #pragma once
 #include <memory>
-#include "concurrentqueue.h"
 #include <random>
+#include "concurrentqueue.h"
+#include "Memory.h"
+#include "ThreadLocalTask.h"
 
 namespace MyUtils {
 	//전방 선언띠
@@ -15,6 +17,7 @@ namespace MyUtils {
 	using GlobalQueueType = moodycamel::ConcurrentQueue<std::shared_ptr<MyUtils::Actor>>;
 	extern GlobalQueueType* GActorQueue;
 	extern class ActorMessageScheduler* GActorMessageScheduler;
+	extern thread_local Memory::MPSCQueue<TLTask*> TLTaskQueue;
 	extern thread_local std::shared_ptr<MyUtils::Actor> LCurrentActor;
 	extern thread_local uint32_t MyThreadID;
 	extern thread_local uint64_t LEndTickCount;
