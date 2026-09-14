@@ -22,6 +22,17 @@ namespace MyUtils {
 		LRanGen.seed(rd());
 	}
 
+	void ThreadManager::DestroyTLS() {
+		//지금은 할 일이 없다.
+		//
+		//send buffer는 여기서 정리하지 않는다. SendBufferManager가 함수 지역
+		//thread_local이라 소멸자가 스레드 종료 시 current chunk 참조를 알아서
+		//놓는다. 여기서 부르면 조금 더 일찍 놓일 뿐이고, 대신 ThreadManager가
+		//SendBuffer에 의존하게 된다.
+		//
+		//스레드 종료 시 정리가 필요한 TLS가 생기면 여기에 넣는다.
+	}
+
 	void ThreadManager::GetRegisteredActorAndProcess()	{
 		while (LCurrentActor == nullptr) {
 			shared_ptr<Actor> ActorRef;

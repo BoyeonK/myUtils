@@ -10,7 +10,6 @@ namespace MyUtils {
 	class Actor;
 	class ThreadManager;
 	class ActorMessageScheduler;
-	namespace Network { class SendBufferChunk; class SendBufferManager; }
 
 	//Thread 및 Actor관련
 	extern class ThreadManager* GThreadManager;
@@ -22,9 +21,9 @@ namespace MyUtils {
 	extern thread_local uint32_t MyThreadID;
 	extern thread_local uint64_t LEndTickCount;
 
-	//Buffer관련
-	extern class Network::SendBufferManager* GSendBufferManager;
-	extern thread_local std::shared_ptr<MyUtils::Network::SendBufferChunk> LSendBufferChunkRef;
+	//Buffer관련은 MyUtils/SendBuffer.h 참조.
+	//Chunk 수명은 refcount가, current chunk는 thread_local SendBufferManager가
+	//들고 있으므로 전역 변수가 필요 없다.
 
 	//난수 생성기
 	extern thread_local std::mt19937 LRanGen;

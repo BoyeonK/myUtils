@@ -12,7 +12,7 @@ namespace MyUtils {
 		~ThreadManager();
 
 		static void InitTLS();
-		static void DestroyTLS() { };
+		static void DestroyTLS();
 		static void GetRegisteredActorAndProcess();
 		static void DistributeOnTimeActorMessages();
 

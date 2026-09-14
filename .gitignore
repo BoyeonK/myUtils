@@ -377,3 +377,7 @@ MigrationBackup/
 .ionide/
 
 # End of https://www.toptal.com/developers/gitignore/api/vs,cmake
+# 빌드 디렉터리
+build/
+out/
+images/portfolio/
