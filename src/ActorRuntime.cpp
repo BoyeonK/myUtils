@@ -1,7 +1,10 @@
 #include "MyUtils/Actor.h"
 #include "MyUtils/Assert.h"
+#include "MyUtils/Profiling.h"
 
+#include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
@@ -28,6 +31,123 @@ namespace MyUtils::Actors {
 		STOPPING,
 		DEAD,
 	};
+
+	// =======================================================================
+	// 계측
+	//
+	//   SendBuffer와 같은 패턴이다. thread_local 블록이 자기 생성자/소멸자에서
+	//   등록과 집계를 처리하므로 hot path에 동기화가 없고, ThreadManager를
+	//   거치지 않은 thread도 자동으로 처리된다.
+	// =======================================================================
+	namespace {
+
+		std::mutex& StatsLock() {
+			static std::mutex lock;
+			return lock;
+		}
+
+		std::vector<ActorStats*>& StatsRegistry() {
+			static std::vector<ActorStats*> registry;
+			return registry;
+		}
+
+		ActorStats& RetiredStats() {
+			static ActorStats retired;
+			return retired;
+		}
+
+		void AccumulateInto(ActorStats& dst, const ActorStats& src) {
+			dst.sendAccepted += src.sendAccepted;
+			dst.sendRejected += src.sendRejected;
+			dst.scheduleCount += src.scheduleCount;
+			dst.scheduleAbortedSystemStopping += src.scheduleAbortedSystemStopping;
+			dst.runCount += src.runCount;
+			dst.messagesHandled += src.messagesHandled;
+			dst.budgetExhaustedCount += src.budgetExhaustedCount;
+			dst.queueWaitUsTotal += src.queueWaitUsTotal;
+			dst.spawnCount += src.spawnCount;
+			dst.finalizeCount += src.finalizeCount;
+			dst.handlerExceptionCount += src.handlerExceptionCount;
+			dst.workerSleepCount += src.workerSleepCount;
+			dst.mailboxLockCount += src.mailboxLockCount;
+			dst.mailboxWaitUsTotal += src.mailboxWaitUsTotal;
+		}
+
+		class ThreadStatsBlock {
+		public:
+			ThreadStatsBlock() {
+				std::lock_guard<std::mutex> guard(StatsLock());
+				StatsRegistry().push_back(&_values);
+			}
+
+			~ThreadStatsBlock() {
+				std::lock_guard<std::mutex> guard(StatsLock());
+				std::vector<ActorStats*>& registry = StatsRegistry();
+				registry.erase(
+					std::remove(registry.begin(), registry.end(), &_values),
+					registry.end());
+				AccumulateInto(RetiredStats(), _values);
+			}
+
+			ThreadStatsBlock(const ThreadStatsBlock&) = delete;
+			ThreadStatsBlock& operator=(const ThreadStatsBlock&) = delete;
+
+			ActorStats& Values() noexcept { return _values; }
+
+		private:
+			ActorStats _values;
+		};
+
+		ActorStats& Stats() noexcept {
+			thread_local ThreadStatsBlock block;
+			return block.Values();
+		}
+
+		std::uint64_t NowUs() noexcept {
+			using namespace std::chrono;
+			return static_cast<std::uint64_t>(
+				duration_cast<microseconds>(steady_clock::now().time_since_epoch()).count());
+		}
+
+		// 계측 3단 프로브를 단 mailbox 락.
+		//
+		// 플래그가 꺼져 있으면 clock을 읽지 않으므로 평범한 lock_guard와 같다.
+		// 꺼졌을 때 비용은 relaxed load 한 번과 예측되는 분기뿐이다. ADR-0013
+		class TimedMailboxLock {
+		public:
+			explicit TimedMailboxLock(std::mutex& mailboxLock) : _lock(&mailboxLock) {
+				if (!IsProfilingEnabled()) {
+					_lock->lock();
+					return;
+				}
+
+				const std::uint64_t begin = NowUs();
+				_lock->lock();
+
+				ActorStats& stats = Stats();
+				stats.mailboxLockCount += 1;
+				stats.mailboxWaitUsTotal += NowUs() - begin;
+			}
+
+			~TimedMailboxLock() { _lock->unlock(); }
+
+			TimedMailboxLock(const TimedMailboxLock&) = delete;
+			TimedMailboxLock& operator=(const TimedMailboxLock&) = delete;
+
+		private:
+			std::mutex* _lock = nullptr;
+		};
+	}
+
+	ActorStats SnapshotStats() {
+		std::lock_guard<std::mutex> guard(StatsLock());
+
+		ActorStats total = RetiredStats();
+		for (const ActorStats* block : StatsRegistry())
+			AccumulateInto(total, *block);
+
+		return total;
+	}
 
 	// =======================================================================
 	// ActorControlBlock
@@ -63,6 +183,10 @@ namespace MyUtils::Actors {
 
 		std::atomic<ActorState> _state{ ActorState::IDLE };
 		std::atomic<bool> _finalizeStarted{ false };
+
+		// 계측 2단. runnable 등록 시각. 큐 대기 시간을 재는 데 쓴다.
+		// 등록한 thread가 쓰고 worker가 읽는다. 순서는 큐가 보장한다.
+		std::atomic<std::uint64_t> _enqueuedAtUs{ 0 };
 	};
 
 	// =======================================================================
@@ -127,7 +251,7 @@ namespace MyUtils::Actors {
 		{
 			// acceptance gate. Stop도 같은 락 안에서 STOPPING으로 전이하므로
 			// "Stop 이후 accept" 여부가 락 획득 순서 하나로 결정된다.
-			std::lock_guard<std::mutex> guard(_mailboxLock);
+			TimedMailboxLock guard(_mailboxLock);
 
 			const ActorState state = _state.load();
 			if (state != ActorState::STOPPING && state != ActorState::DEAD) {
@@ -135,6 +259,12 @@ namespace MyUtils::Actors {
 				accepted = true;
 			}
 		}
+
+		ActorStats& stats = Stats();
+		if (accepted)
+			stats.sendAccepted += 1;
+		else
+			stats.sendRejected += 1;
 
 		// 거부되었다면 여기서 파괴된다. 락 밖이어야 한다 (L4) —
 		// 메시지가 ActorRef를 들고 있고 소멸자가 다시 Send할 수 있다.
@@ -149,7 +279,7 @@ namespace MyUtils::Actors {
 	void ActorControlBlock::Stop() {
 		ActorState prev = _state.load();
 		{
-			std::lock_guard<std::mutex> guard(_mailboxLock);
+			TimedMailboxLock guard(_mailboxLock);
 
 			// [주의] prev를 load 후 store하면 안 된다. IDLE -> SCHEDULED 전이는
 			// 이 락 밖에서 일어나므로, 그 사이에 producer가 SCHEDULED로 바꾸고
@@ -179,14 +309,22 @@ namespace MyUtils::Actors {
 			return;
 		}
 
+		// 계측 2단. 배치당 clock 1회.
+		ActorStats& stats = Stats();
+		stats.runCount += 1;
+		const std::uint64_t enqueuedAtUs = _enqueuedAtUs.load(std::memory_order_relaxed);
+		if (enqueuedAtUs != 0)
+			stats.queueWaitUsTotal += NowUs() - enqueuedAtUs;
+
 		// state가 RUNNING인 동안에는 Finalize가 실행될 수 없으므로 안전하다.
 		Actor* actor = _actor.get();
 		ASSERT_CRASH(actor != nullptr);
 
-		for (std::size_t processed = 0; processed < budget; ++processed) {
+		std::size_t processed = 0;
+		for (; processed < budget; ++processed) {
 			MessagePtr message;
 			{
-				std::lock_guard<std::mutex> guard(_mailboxLock);
+				TimedMailboxLock guard(_mailboxLock);
 				if (_mailbox.empty())
 					break;
 				message = std::move(_mailbox.front());
@@ -202,13 +340,20 @@ namespace MyUtils::Actors {
 			catch (...) {
 				// handler가 던졌다면 Actor state가 부분적으로만 바뀌었을 수 있다.
 				// 다음 메시지를 계속 처리하지 않고 격리한다. ADR-0012
+				stats.handlerExceptionCount += 1;
 				message.reset();   // 락 밖 파괴 (L4)
 				Stop();
 				break;             // drain 루프 즉시 탈출
 			}
 
+			stats.messagesHandled += 1;
+
 			// message는 여기서 락 밖에서 파괴된다 (L4)
 		}
+
+		// budget을 다 썼다면 DEFAULT_MESSAGE_BUDGET이 작다는 신호일 수 있다
+		if (processed == budget)
+			stats.budgetExhaustedCount += 1;
 
 		ActorState running = ActorState::RUNNING;
 		if (!_state.compare_exchange_strong(running, ActorState::IDLE)) {
@@ -227,13 +372,15 @@ namespace MyUtils::Actors {
 		if (_finalizeStarted.exchange(true))
 			return;   // 이미 누군가 수행 중이거나 완료했다
 
+		Stats().finalizeCount += 1;
+
 		// Unregister가 registry의 마지막 참조를 놓을 수 있다. 그 자리에서
 		// 객체가 파괴되면 아래 state.store가 dangling이 되므로 붙잡아둔다.
 		const std::shared_ptr<ActorControlBlock> self = shared_from_this();
 
 		std::deque<MessagePtr> drained;
 		{
-			std::lock_guard<std::mutex> guard(_mailboxLock);
+			TimedMailboxLock guard(_mailboxLock);
 			drained.swap(_mailbox);   // 락 안에서는 swap만
 		}
 
@@ -255,17 +402,22 @@ namespace MyUtils::Actors {
 			return;   // 이미 SCHEDULED/RUNNING 이거나 종료 중이다
 
 		// CAS 성공자만 등록한다. 큐에 같은 ACB가 두 번 들어갈 경로가 없다.
+		_enqueuedAtUs.store(NowUs(), std::memory_order_relaxed);
+
 		const std::shared_ptr<ActorRuntime> runtime = _runtime.lock();
-		if (runtime && runtime->EnqueueRunnable(shared_from_this()))
+		if (runtime && runtime->EnqueueRunnable(shared_from_this())) {
+			Stats().scheduleCount += 1;
 			return;
+		}
 
 		// 시스템이 종료 중이라 등록하지 못했다. 되돌린다.
+		Stats().scheduleAbortedSystemStopping += 1;
 		ActorState scheduled = ActorState::SCHEDULED;
 		_state.compare_exchange_strong(scheduled, ActorState::IDLE);
 	}
 
 	bool ActorControlBlock::MailboxEmpty() {
-		std::lock_guard<std::mutex> guard(_mailboxLock);
+		TimedMailboxLock guard(_mailboxLock);
 		return _mailbox.empty();
 	}
 
@@ -318,6 +470,7 @@ namespace MyUtils::Actors {
 			}
 
 			// spurious wakeup은 바깥 루프가 흡수한다
+			Stats().workerSleepCount += 1;
 			_wakeup.wait(lock);
 		}
 	}
@@ -434,6 +587,7 @@ namespace MyUtils::Actors {
 			std::make_shared<ActorControlBlock>(std::move(actor), _runtime);
 
 		_runtime->Register(cb);
+		Stats().spawnCount += 1;
 		return ActorRef{ std::move(cb) };
 	}
 

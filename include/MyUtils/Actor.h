@@ -14,6 +14,7 @@
 //   - Send 가 true 여도 전달은 보장되지 않는다. accept 되었다는 뜻뿐이다.
 
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 
 namespace MyUtils::Actors {
@@ -138,4 +139,55 @@ namespace MyUtils::Actors {
 	private:
 		std::shared_ptr<ActorRuntime> _runtime;
 	};
+
+	// -----------------------------------------------------------------------
+	// 계측
+	//
+	//   ADR-0011·0012가 정한 재검토 조건을 관측하기 위한 것이다.
+	//   hot path는 자기 thread의 블록만 만지므로 동기화가 없다.
+	//
+	//   3단(메시지 단위 시계 읽기)만 MyUtils::SetProfilingEnabled로 제어된다.
+	//   나머지는 항상 누적된다. 자세한 내용은 ADR-0013.
+	// -----------------------------------------------------------------------
+	struct ActorStats {
+		// --- Send ---
+		std::uint64_t sendAccepted = 0;
+		std::uint64_t sendRejected = 0;                 // Actor가 STOPPING/DEAD
+
+		// --- 스케줄링 (2단) ---
+		std::uint64_t scheduleCount = 0;                // IDLE -> SCHEDULED 성공
+		std::uint64_t scheduleAbortedSystemStopping = 0;// 시스템 종료 중이라 등록 실패
+		std::uint64_t runCount = 0;                     // 배치 실행 횟수
+		std::uint64_t messagesHandled = 0;
+
+		// budget 소진으로 끊긴 배치 수. runCount 대비 비율이 높으면
+		// DEFAULT_MESSAGE_BUDGET이 작다는 신호다(ADR-0011 Uncertainty).
+		std::uint64_t budgetExhaustedCount = 0;
+
+		// runnable 등록부터 worker가 집기까지 걸린 시간의 합.
+		// queueWaitUsTotal / runCount 가 평균이며, work stealing이 필요한지
+		// 판단하는 1차 지표다.
+		std::uint64_t queueWaitUsTotal = 0;
+
+		// --- 수명 (1단) ---
+		std::uint64_t spawnCount = 0;
+		std::uint64_t finalizeCount = 0;
+		std::uint64_t handlerExceptionCount = 0;
+
+		// --- worker ---
+		std::uint64_t workerSleepCount = 0;             // cv.wait 진입 횟수
+
+		// --- 3단: SetProfilingEnabled(true)일 때만 누적된다 ---
+		//
+		// mailbox mutex가 contention 지점인지 본다(ADR-0011 Consequences).
+		// 평균 대기 시간 = mailboxWaitUsTotal / mailboxLockCount.
+		std::uint64_t mailboxLockCount = 0;
+		std::uint64_t mailboxWaitUsTotal = 0;
+	};
+
+	// 모든 thread의 값을 합산한 스냅샷. 이미 종료된 thread의 누적분도 포함한다.
+	//
+	// [주의] 살아 있는 thread의 카운터를 동기화 없이 읽으므로 엄밀히는 data race다.
+	// 통계 목적이라 허용한다. 정확한 값이 필요하면 대상 thread를 join한 뒤 읽을 것.
+	ActorStats SnapshotStats();
 }

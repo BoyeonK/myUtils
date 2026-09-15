@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <mutex>
 #include <utility>
 #include <vector>
@@ -43,6 +44,8 @@ namespace MyUtils::Network {
 			dst.largeAllocCount += src.largeAllocCount;
 			dst.chunkAcquireCount += src.chunkAcquireCount;
 			dst.chunkCreateCount += src.chunkCreateCount;
+			dst.chunkDestroyCount += src.chunkDestroyCount;
+			dst.chunkLifetimeUsTotal += src.chunkLifetimeUsTotal;
 		}
 
 		// 생성자가 등록하고 소멸자가 누적값을 접어 넣는다.
@@ -78,6 +81,14 @@ namespace MyUtils::Network {
 		}
 
 		std::atomic<std::size_t> GLiveChunkCount{ 0 };
+		std::atomic<std::size_t> GLiveChunkBytes{ 0 };
+		std::atomic<std::uint64_t> GMaxChunkLifetimeUs{ 0 };
+
+		std::uint64_t NowUs() noexcept {
+			using namespace std::chrono;
+			return static_cast<std::uint64_t>(
+				duration_cast<microseconds>(steady_clock::now().time_since_epoch()).count());
+		}
 	}
 
 	SendBufferStats SnapshotStats() {
@@ -92,6 +103,14 @@ namespace MyUtils::Network {
 
 	std::size_t LiveChunkCount() noexcept {
 		return GLiveChunkCount.load(std::memory_order_relaxed);
+	}
+
+	std::size_t LiveChunkBytes() noexcept {
+		return GLiveChunkBytes.load(std::memory_order_relaxed);
+	}
+
+	std::uint64_t MaxChunkLifetimeUs() noexcept {
+		return GMaxChunkLifetimeUs.load(std::memory_order_relaxed);
 	}
 
 	// =======================================================================
@@ -205,10 +224,26 @@ namespace MyUtils::Network {
 		, _capacity(capacity) {
 		ASSERT_CRASH(capacity > 0);
 		GLiveChunkCount.fetch_add(1, std::memory_order_relaxed);
+		GLiveChunkBytes.fetch_add(capacity, std::memory_order_relaxed);
+		_createdAtUs = NowUs();
 	}
 
 	SendBufferChunk::~SendBufferChunk() {
 		GLiveChunkCount.fetch_sub(1, std::memory_order_relaxed);
+		GLiveChunkBytes.fetch_sub(_capacity, std::memory_order_relaxed);
+
+		// 계측 1단. chunk당 1회라 빈도가 낮다.
+		const std::uint64_t lifetimeUs = NowUs() - _createdAtUs;
+
+		SendBufferStats& stats = Stats();
+		stats.chunkDestroyCount += 1;
+		stats.chunkLifetimeUsTotal += lifetimeUs;
+
+		std::uint64_t observedMax = GMaxChunkLifetimeUs.load(std::memory_order_relaxed);
+		while (lifetimeUs > observedMax &&
+			!GMaxChunkLifetimeUs.compare_exchange_weak(observedMax, lifetimeUs,
+				std::memory_order_relaxed)) {
+		}
 	}
 
 	void SendBufferChunk::Reset() noexcept {

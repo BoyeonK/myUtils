@@ -10,6 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - **송신 버퍼** (`SendBuffer.h`) — thread-local bump allocator + refcounted chunk. 완성된 컴포넌트다.
 - **Actor Runtime** (`Actor.h`) — MPSC mailbox + atomic 상태 머신 + worker pool. 실행 규약은 `design/actor-runtime.md`, 근거는 ADR-0010~0012.
+- **계측** (`Profiling.h`) — 비용 3단 구분. 1·2단은 항상 켜져 있고 3단만 `SetProfilingEnabled()`로 제어한다(ADR-0013). ADR들이 정한 재검토 조건을 재빌드 없이 관측하기 위한 것이다.
 - **스레드 런처** (`Thread.h`) — `ThreadManager`의 launch/join이 전부. **현재 라이브러리의 어떤 것도 이걸 거쳤는지 묻지 않는다**(ADR-0009). 편의 유틸리티로 남아 있다.
 
 액터/메시지 시스템, 오브젝트 풀, MPSC 큐, 타이머 스케줄러, 그리고 전역 변수 일체를 **2026-09-15에 전부 제거했다.** 전면 재작성 대상이었고, 그 위에 무언가를 쌓는 것보다 비우고 다시 세우는 편이 낫다는 판단이었다. 필요하면 git 히스토리(`2ce7019` 이전)에서 참고할 수 있다.
@@ -93,6 +94,20 @@ PUBLIC이다.
 - 주석과 커밋 메시지는 한국어다.
 
 ## 아키텍처
+
+### 계측 (`Profiling.h`)
+
+ADR들이 "이 조건이 관측되면 재검토한다"고 달아둔 조건을 **재빌드 없이** 판정하기 위한 것이다. 비용 기준 3단으로 나뉜다(ADR-0013).
+
+| 단 | 빈도 | 상태 |
+|---|---|---|
+| 1단 — chunk·actor 수명 | chunk/actor당 | **항상 켜짐** |
+| 2단 — 배치·runnable | 배치당 (메시지당 1/32 이하) | **항상 켜짐** |
+| 3단 — 메시지 단위 시계 읽기 | 메시지당 clock 2회 | `SetProfilingEnabled()` |
+
+- **새 지표를 추가할 때 기준은 "메시지당 clock을 읽는가"다.** 그렇다면 3단, 아니면 항상 켠다. 빈도가 낮은 것까지 끄면 정작 운영 중에 볼 수 없다.
+- `#ifdef`로 가르지 않는 이유는 ADR-0013에 있다. 요약하면 꺼졌을 때 이득이 1ns 미만인데 빌드 구성이 둘로 늘고 컴파일되지 않는 코드가 썩는다.
+- 조회는 `MyUtils::Network::SnapshotStats()`, `MyUtils::Actors::SnapshotStats()`, `LiveChunkBytes()`, `MaxChunkLifetimeUs()`. 두 테스트 실행 파일이 종료 시 요약을 출력한다.
 
 ### Actor Runtime (`Actor.h` / `ActorRuntime.cpp`)
 

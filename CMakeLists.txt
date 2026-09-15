@@ -15,11 +15,13 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_library(MyUtils STATIC
     src/SendBuffer.cpp
     src/ActorRuntime.cpp
+    src/Profiling.cpp
     src/Thread.cpp
 
     include/MyUtils/SendBuffer.h
     include/MyUtils/Actor.h
     include/MyUtils/Assert.h
+    include/MyUtils/Profiling.h
     include/MyUtils/Thread.h
 )
 

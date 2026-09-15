@@ -85,6 +85,11 @@ namespace MyUtils::Network {
 		std::unique_ptr<std::byte[]> _storage;
 		std::size_t _capacity = 0;
 		std::size_t _offset = 0;
+
+		// 계측 1단. chunk당 clock 2회라 메시지당으로 환산하면 0.2ns 미만이다.
+		// "장수 SendView 때문에 다수 chunk가 장시간 반환되지 않는가"(ADR-0007
+		// 재검토 조건 2)를 보려면 이게 있어야 한다.
+		std::uint64_t _createdAtUs = 0;
 	};
 
 	// -----------------------------------------------------------------------
@@ -214,6 +219,11 @@ namespace MyUtils::Network {
 		std::uint64_t largeAllocCount = 0;     // 전용 chunk로 간 요청
 		std::uint64_t chunkAcquireCount = 0;
 		std::uint64_t chunkCreateCount = 0;    // pool miss
+
+		// chunk가 얼마나 오래 고정되어 있었는지. total / destroyCount 가 평균이다.
+		// ADR-0007 재검토 조건 2를 판정하는 지표.
+		std::uint64_t chunkDestroyCount = 0;
+		std::uint64_t chunkLifetimeUsTotal = 0;
 	};
 
 	// 모든 thread의 값을 합산한 스냅샷. 이미 종료된 thread의 누적분도 포함한다.
@@ -224,6 +234,16 @@ namespace MyUtils::Network {
 
 	// 살아 있는 chunk 수. Pool에 들어 있는 유휴 chunk도 포함한다.
 	std::size_t LiveChunkCount() noexcept;
+
+	// 살아 있는 chunk가 실제로 붙잡고 있는 바이트 합계.
+	//
+	// 전용 chunk는 용량이 제각각이라 `LiveChunkCount() * DEFAULT_CHUNK_CAPACITY`로
+	// 추정하면 부정확하다(ADR-0008 Consequences). 메모리 압력을 볼 때는 이 값을 쓴다.
+	std::size_t LiveChunkBytes() noexcept;
+
+	// 지금까지 관측된 chunk 고정 시간의 최댓값. 평균은 SnapshotStats의
+	// chunkLifetimeUsTotal / chunkDestroyCount 로 구한다.
+	std::uint64_t MaxChunkLifetimeUs() noexcept;
 
 	std::size_t PoolIdleCountApprox() noexcept;
 	void SetPoolIdleLimit(std::size_t chunkCount) noexcept;

@@ -4,6 +4,7 @@
 // 테스트 이름은 그 표와 일치해야 한다. 이름을 바꾸면 스펙도 같이 고칠 것.
 
 #include "MyUtils/Actor.h"
+#include "MyUtils/Profiling.h"
 
 #include <atomic>
 #include <chrono>
@@ -511,7 +512,68 @@ static void TestHandlerExceptionStopsActor() {
     CHECK(!actor.Send(std::make_unique<IntMessage>(1)));
 }
 
+static void TestProfilingFlagGatesMailboxProbe() {
+    Section("ProfilingFlagGatesMailboxProbe");
+
+    ActorSystem system(2);
+    auto stats = std::make_shared<Stats>();
+    ActorRef actor = system.Spawn(std::make_unique<CountingActor>(stats));
+
+    // 꺼진 상태에서는 3단 프로브가 전혀 누적되지 않아야 한다
+    MyUtils::SetProfilingEnabled(false);
+    CHECK(!MyUtils::IsProfilingEnabled());
+
+    const std::uint64_t lockedBefore = SnapshotStats().mailboxLockCount;
+    for (int i = 0; i < 300; ++i)
+        CHECK(actor.Send(std::make_unique<IntMessage>(1)));
+    CHECK(WaitUntil([&] { return stats->handled.load() == 300; }));
+    CHECK(SnapshotStats().mailboxLockCount == lockedBefore);
+
+    // 켜면 누적된다
+    MyUtils::SetProfilingEnabled(true);
+    for (int i = 0; i < 300; ++i)
+        CHECK(actor.Send(std::make_unique<IntMessage>(1)));
+    CHECK(WaitUntil([&] { return stats->handled.load() == 600; }));
+    CHECK(SnapshotStats().mailboxLockCount > lockedBefore);
+
+    // 1·2단은 플래그와 무관하게 항상 누적된다
+    CHECK(SnapshotStats().messagesHandled >= 600);
+
+    MyUtils::SetProfilingEnabled(false);
+}
+
 // ---------------------------------------------------------------------------
+
+static void PrintStats() {
+    const ActorStats s = SnapshotStats();
+
+    std::printf("\n--- actor stats ---\n");
+    std::printf("  send           : accepted %llu / rejected %llu\n",
+        (unsigned long long)s.sendAccepted, (unsigned long long)s.sendRejected);
+    std::printf("  schedule       : %llu (시스템 종료로 취소 %llu)\n",
+        (unsigned long long)s.scheduleCount,
+        (unsigned long long)s.scheduleAbortedSystemStopping);
+    std::printf("  batch          : %llu회, 메시지 %llu건\n",
+        (unsigned long long)s.runCount, (unsigned long long)s.messagesHandled);
+    if (s.runCount > 0) {
+        std::printf("  배치당 평균    : %.2f건 (budget %zu, 소진 %llu회 = %.1f%%)\n",
+            double(s.messagesHandled) / double(s.runCount),
+            DEFAULT_MESSAGE_BUDGET,
+            (unsigned long long)s.budgetExhaustedCount,
+            100.0 * double(s.budgetExhaustedCount) / double(s.runCount));
+        std::printf("  큐 대기 평균   : %.1f us\n",
+            double(s.queueWaitUsTotal) / double(s.runCount));
+    }
+    std::printf("  actor          : spawn %llu / finalize %llu / handler 예외 %llu\n",
+        (unsigned long long)s.spawnCount, (unsigned long long)s.finalizeCount,
+        (unsigned long long)s.handlerExceptionCount);
+    std::printf("  worker sleep   : %llu회\n", (unsigned long long)s.workerSleepCount);
+    if (s.mailboxLockCount > 0) {
+        std::printf("  mailbox 대기   : 평균 %.2f us (%llu회 측정, 3단)\n",
+            double(s.mailboxWaitUsTotal) / double(s.mailboxLockCount),
+            (unsigned long long)s.mailboxLockCount);
+    }
+}
 
 int main() {
     TestConcurrentExecutionForbidden();
@@ -527,6 +589,9 @@ int main() {
     TestSelfStopFromHandler();
     TestSpawnFromHandler();
     TestHandlerExceptionStopsActor();
+    TestProfilingFlagGatesMailboxProbe();
+
+    PrintStats();
 
     std::printf("\n%s  (%d checks, %d failures)\n",
         GFailCount == 0 ? "ALL PASS" : "FAILED", GCheckCount, GFailCount);
