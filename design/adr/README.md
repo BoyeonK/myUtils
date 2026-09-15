@@ -38,6 +38,7 @@ ADR을 명시한 새 질문을 열고, 결론이 나면 새 ADR을 쓴 뒤 기�
 | # | 제목 | Status |
 |---|---|---|
 | [0009](0009-parts-not-framework.md) | WorkerContext를 도입하지 않는다 | Accepted |
+| [0013](0013-instrumentation-tiers.md) | 계측을 비용 3단으로 나누고, 비싼 것만 런타임 플래그로 끈다 | Accepted |
 
 ### 송신 버퍼 (`SendBuffer`)
 
