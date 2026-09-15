@@ -302,6 +302,41 @@ prev == SCHEDULED / RUNNING   → worker가 전이 CAS 실패로 감지해 Final
 mailbox 락은 **acceptance를 선형화**하고, CAS 루프는 **락 밖 전이와의 경합**을 막는다.
 둘 다 필요하다.
 
+### Consumption boundary — drain 쪽의 짝
+
+`Send`에 acceptance boundary가 있듯 drain 루프에도 대칭되는 경계가 필요하다.
+
+> **worker는 메시지를 pop하기 전, mailbox 락 안에서 state가 여전히 `RUNNING`인지
+> 확인한다. 아니면 drain 루프를 즉시 탈출한다.**
+
+```
+for (budget 만큼) {
+    lock(mailbox)
+      state != RUNNING?  → break        ← consumption boundary
+      mailbox 비었나?     → break
+      message = pop_front()
+    unlock(mailbox)
+
+    Handle(message)                     ← 락 밖 (L1)
+}
+```
+
+**`Stop`은 state만 바꿀 뿐 worker는 여전히 drain 루프 안에 있다.** 이 검사가 없으면
+`Stop` 이후에도 pending 메시지를 budget 한도(31건)까지 계속 처리한다 — `Stop`이
+pending을 버린다는 계약(§11)과 정면으로 어긋난다. handler 예외 경로에만 `break`가
+있고 이쪽에 없으면 같은 상황을 두 가지로 처리하는 것이 된다.
+
+**검사를 `Handle()` 반환 직후가 아니라 락 안에 두는 이유**는 `Stop`이 바로 그 락을
+쥔 채 `STOPPING`을 쓰기 때문이다. 같은 락 안에서 읽으면 경계가 이렇게 닫힌다.
+
+> Stop이 mailbox 락을 통과한 시점 이후로는 어떤 메시지도 새로 pop되지 않는다.
+
+`Handle()` 반환 직후에 검사하면 검사와 다음 pop 사이에 창이 남아 이 문장이 성립하지
+않는다. 어차피 pop을 위해 잡는 락이므로 추가 비용도 없다.
+
+적용 대상은 self-stop만이 아니다. **`Handle()` 실행 중에 들어온 모든 `Stop`** — 다른
+스레드의 `Stop`, `Shutdown` 경로, handler 자신의 `Stop` — 이 전부 여기서 관측된다.
+
 | 락 획득 순서 | Send 결과 | 메시지 운명 |
 |---|---|---|
 | Send → Stop | `true` | Stop이 discard |
@@ -432,6 +467,7 @@ public:
 | | `SelfStopFromHandler` |
 | | `SpawnFromHandler` |
 | Handler 예외 후 추가 메시지를 처리하지 않는다 | `HandlerExceptionStopsActor` |
+| **Stop 이후 pending 메시지를 처리하지 않는다** (consumption boundary, §6) | `SelfStopFromHandler` |
 
 **L1은 락 보유를 직접 관측하지 않는다.** 대신 어겼을 때 반드시 데드락하는 세 가지
 사용 패턴을 테스트한다. 관측 가능한 결과로 invariant를 잡는 방식이다.

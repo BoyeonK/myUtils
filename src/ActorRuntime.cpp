@@ -325,6 +325,18 @@ namespace MyUtils::Actors {
 			MessagePtr message;
 			{
 				TimedMailboxLock guard(_mailboxLock);
+
+				// [consumption boundary] Stop은 이 락을 쥔 채 STOPPING을 쓴다.
+				// 따라서 락을 통과한 Stop은 반드시 여기서 보이고, 그 이후로는
+				// 어떤 메시지도 새로 pop되지 않는다. Send의 acceptance boundary와
+				// 같은 락으로 대칭을 이룬다. design/actor-runtime.md §6
+				//
+				// 이 검사가 없으면 Stop은 state만 바꿀 뿐 worker는 여전히 이 루프
+				// 안이므로, pending 메시지를 budget 한도까지 계속 처리한다 —
+				// "Stop은 pending을 버린다"는 계약과 정면으로 어긋난다. ADR-0012
+				if (_state.load() != ActorState::RUNNING)
+					break;
+
 				if (_mailbox.empty())
 					break;
 				message = std::move(_mailbox.front());

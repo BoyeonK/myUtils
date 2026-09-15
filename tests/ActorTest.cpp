@@ -149,10 +149,15 @@ private:
     StatsPtr _stats;
 };
 
-// self-stop
+// self-stop.
+// pendingBeforeStop > 0 이면 Stop 직전에 자기 자신에게 그만큼 보낸다. Stop 시점에
+// 메일박스가 비어 있지 않은 상황을 "결정적으로" 만들기 위한 것이다 — 밖에서
+// 두 건을 연달아 Send하면 worker가 첫 건을 먼저 집어갈 수 있어 flaky해진다.
 struct StopSelfMessage : Message {
-    explicit StopSelfMessage(ActorRef s) : self(std::move(s)) {}
+    StopSelfMessage(ActorRef s, int pending = 0)
+        : self(std::move(s)), pendingBeforeStop(pending) {}
     ActorRef self;
+    int pendingBeforeStop;
 };
 
 class SelfStoppingActor : public Actor {
@@ -161,8 +166,21 @@ public:
 
     void Handle(Message& message) override {
         _stats->handled.fetch_add(1);
-        if (auto* m = dynamic_cast<StopSelfMessage*>(&message))
-            m->self.Stop();   // [L1 검증] 같은 mailbox 락을 쓰므로 락 보유 시 데드락
+
+        auto* m = dynamic_cast<StopSelfMessage*>(&message);
+        if (m == nullptr)
+            return;
+
+        // Stop보다 먼저 보내므로 state가 아직 RUNNING이라 전부 accept된다.
+        // 반환 시점에 메일박스에 확실히 쌓여 있으므로, worker가 Handle 반환 후
+        // 상태를 재확인하지 않으면 이것들이 그대로 실행된다.
+        // (CHECK는 스레드 안전하지 않아 여기서 쓰지 않는다. atomic에 기록한다)
+        for (int i = 0; i < m->pendingBeforeStop; ++i) {
+            if (m->self.Send(std::make_unique<IntMessage>(1)))
+                _stats->sum.fetch_add(1);
+        }
+
+        m->self.Stop();   // [L1 검증] 같은 mailbox 락을 쓰므로 락 보유 시 데드락
     }
 
 private:
@@ -469,12 +487,19 @@ static void TestSelfStopFromHandler() {
     auto stats = std::make_shared<Stats>();
     ActorRef actor = system.Spawn(std::make_unique<SelfStoppingActor>(stats));
 
-    // handler 안에서 자기 자신을 Stop한다. acceptance gate가 같은 mailbox 락을
-    // 쓰므로, 락을 쥔 채 Handle을 불렀다면 여기서 데드락한다.
-    CHECK(actor.Send(std::make_unique<StopSelfMessage>(actor)));
+    // handler 안에서 자기 자신에게 3건을 보낸 뒤 Stop한다. acceptance gate가 같은
+    // mailbox 락을 쓰므로, 락을 쥔 채 Handle을 불렀다면 여기서 데드락한다.
+    CHECK(actor.Send(std::make_unique<StopSelfMessage>(actor, 3)));
 
     CHECK(WaitUntil([&] { return system.LiveActorCount() == 0; }));
+
+    // Stop 전에 보냈으므로 3건 모두 accept되었다
+    CHECK(stats->sum.load() == 3);
+
+    // 그런데 하나도 실행되지 않아야 한다. consumption boundary가 없으면 worker가
+    // drain 루프 안에 그대로 남아 budget 한도까지 계속 처리한다 (여기서는 4가 된다).
     CHECK(stats->handled.load() == 1);
+
     CHECK(!actor.Send(std::make_unique<IntMessage>(1)));
 }
 

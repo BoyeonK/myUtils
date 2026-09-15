@@ -114,6 +114,7 @@ ADR들이 "이 조건이 관측되면 재검토한다"고 달아둔 조건을 **
 **실행 규약은 `design/actor-runtime.md`에 있다.** 상태 전이표, 두 가지 lost wakeup 프로토콜, 락 규칙, Finalize·Shutdown 시퀀스, invariant ↔ test 표가 거기 있다. 여기에는 손대기 전에 반드시 알아야 할 것만 적는다.
 
 - **`Actor::Handle()`을 mailbox 락을 쥔 채 호출하지 말 것.** self-send / self-stop / handler 안에서의 `Spawn`이 전부 여기에 의존한다. **"배치 처리니까 락을 한 번만 잡자"는 최적화가 자연스럽게 들어올 자리다.** 어기면 `SelfSendFromHandler` / `SelfStopFromHandler` / `SpawnFromHandler` 테스트가 타임아웃한다.
+- **drain 루프는 pop 전에 mailbox 락 안에서 state가 `RUNNING`인지 확인한다.** `Stop`은 state만 바꿀 뿐 worker는 여전히 루프 안이라, 이 검사가 없으면 Stop 이후에도 pending을 budget 한도까지 처리한다. 검사를 `Handle()` 반환 직후로 옮기면 검사와 pop 사이에 창이 생겨 경계가 무너진다 — **락 안이어야 한다.** `SelfStopFromHandler`가 잡는다.
 - **`Stop()`의 이전 상태는 CAS 루프로 포착할 것.** `load` 후 `store`로 쓰면 그 사이에 producer가 `IDLE → SCHEDULED`로 바꿔(이 전이는 mailbox 락 밖에서 일어난다) Finalize 주체 판정이 틀린다.
 - **runnable을 만드는 경로는 `EnqueueRunnable` 하나뿐이다.** 어느 큐에 넣든 worker 깨우기가 거기서 묶인다. 2차에서 이 함수는 "local deque냐 injection queue냐"를 고르는 진입점이 된다 — **한 곳에 모으는 게 아니라 진입점을 우회하지 않는 것**이 규칙이다. 우회하면 그 경로에서만 worker가 깨지 않는다.
 - **`Send()`가 `true`여도 전달은 보장되지 않는다.** accept되었다는 뜻이며, 이후 `Stop`/`Shutdown`이 버릴 수 있다.
