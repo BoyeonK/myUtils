@@ -49,7 +49,7 @@ namespace MyUtils::Network {
 		}
 
 		// 생성자가 등록하고 소멸자가 누적값을 접어 넣는다.
-		// ThreadManager를 거치지 않은 thread도 자동으로 처리된다.
+		// 어느 thread에서 쓰이든 자동으로 처리된다.
 		class ThreadStatsBlock {
 		public:
 			ThreadStatsBlock() {

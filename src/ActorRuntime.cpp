@@ -36,8 +36,8 @@ namespace MyUtils::Actors {
 	// 계측
 	//
 	//   SendBuffer와 같은 패턴이다. thread_local 블록이 자기 생성자/소멸자에서
-	//   등록과 집계를 처리하므로 hot path에 동기화가 없고, ThreadManager를
-	//   거치지 않은 thread도 자동으로 처리된다.
+	//   등록과 집계를 처리하므로 hot path에 동기화가 없고, 어느 thread에서
+	//   쓰이든 자동으로 처리된다.
 	// =======================================================================
 	namespace {
 

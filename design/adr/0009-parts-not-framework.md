@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-09-15
+- Follow-up: 2026-09-15 — 아래 "후속" 참고. `ThreadManager` 자체가 삭제되었다.
 
 ## Context
 
@@ -57,3 +58,22 @@
   다만 그 비용은 hot path가 아니라 스레드 생성·종료 시점에만 든다.
 - 현재 `SendBufferTest`는 `ThreadManager` 없이 생 `std::thread`만으로 돈다. 이 성질을
   유지하는 한 테스트가 단순해진다.
+
+## 후속 (2026-09-15)
+
+**`ThreadManager`를 삭제했다.** 위 Consequences의 첫 항목("아무도 의존하지 않는 편의
+유틸리티다")이 그대로 결론으로 이어졌다.
+
+- 라이브러리와 테스트 어디에서도 쓰지 않았다. Actor Runtime은 자기 worker를
+  `std::thread`로 직접 만든다.
+- 하는 일이 `std::vector<std::thread>` + join 루프였다. 편의성 이득이 5줄이다.
+- **게다가 깨져 있었다.** `Launch`는 뮤텍스를 잡는데 `Join`은 잡지 않아, 동시 호출 시
+  벡터 재할당으로 iterator가 무효화되고 data race가 났다. 동시 `Join`은 이미 join된
+  thread를 다시 join하는 UB였다. 뮤텍스가 있어서 동기화된 것처럼 보이는 게 더 나빴다.
+
+이 ADR의 **결정 자체는 바뀌지 않았다.** `WorkerContext`를 도입하지 않는다는 판단은
+그대로이고, 오히려 스레드 관리 코드가 라이브러리에서 완전히 사라져 "임의 스레드에서
+쓸 수 있는 부품 모음"이라는 성질이 더 분명해졌다.
+
+나중에 스레드 묶음을 join하는 유틸리티가 필요해지면 그때 다시 만든다. 올바른 버전은
+락 안에서 `swap`하고 락 밖에서 `join`하는 형태로 15줄이면 된다.
