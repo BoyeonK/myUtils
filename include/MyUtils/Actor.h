@@ -106,6 +106,17 @@ namespace MyUtils::Actors {
 	// 다시 runnable로 등록된다. 근거 없는 출발점이며 측정 후 조정한다(ADR-0011).
 	inline constexpr std::size_t DEFAULT_MESSAGE_BUDGET = 32;
 
+	// worker가 몇 번에 한 번 injection queue를 local deque보다 먼저 볼 것인가.
+	//
+	// 이게 없으면 local deque가 계속 차 있는 동안 injection을 한 번도 보지 않아
+	// 외부 스레드·I/O completion의 runnable이 무한정 밀린다. 최적값이 아니라
+	// baseline이다(ADR-0014).
+	//
+	// [주의] DEFAULT_MESSAGE_BUDGET과 상호작용한다. 한 번의 local 처리가 최대
+	// 32건이므로 injection 확인 간격은 최악의 경우 메시지 1,952건이다.
+	// 둘 중 하나를 바꾸면 다른 쪽의 의미도 바뀐다.
+	inline constexpr std::size_t INJECTION_POLL_INTERVAL = 61;
+
 	// -----------------------------------------------------------------------
 	// ActorSystem
 	//
@@ -176,6 +187,23 @@ namespace MyUtils::Actors {
 
 		// --- worker ---
 		std::uint64_t workerSleepCount = 0;             // cv.wait 진입 횟수
+
+		// --- 스케줄러 라우팅 (2단, ADR-0014) ---
+		//
+		// localPush / injectionPush 비율이 locality 라우팅이 실제로 도는지 보여준다.
+		// injectionPush만 늘면 worker가 만든 runnable이 local로 안 가고 있다는 뜻이다.
+		std::uint64_t localPushCount = 0;
+		std::uint64_t injectionPushCount = 0;
+
+		// 유휴 worker가 없어 local push의 notify를 건너뛴 횟수.
+		// localPushCount 대비 비율이 0에 가까우면 Q-008의 조건부 notify가
+		// 아무것도 아끼지 못하고 있다는 뜻이다.
+		std::uint64_t notifySkippedCount = 0;
+
+		// stealSuccess / stealAttempt 가 낮으면 헛도는 victim 스캔이 비용이다
+		// (ADR-0014 Uncertainty).
+		std::uint64_t stealAttemptCount = 0;
+		std::uint64_t stealSuccessCount = 0;
 
 		// --- 3단: SetProfilingEnabled(true)일 때만 누적된다 ---
 		//

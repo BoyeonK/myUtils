@@ -10,22 +10,22 @@
 
 ## 범위
 
-1차 구현은 **correctness 확보까지**이고, 스케줄링 구조는 그 다음이다.
+1차 구현은 **correctness 확보까지**였고, 스케줄링 구조는 그 다음이었다. 둘 다 끝났다.
 
-| 1차 (구현됨) | 2차 |
+| 1차 | 2차 |
 |---|---|
 | Message / Actor / Mailbox / ControlBlock | worker-local work-stealing deque |
 | 상태 머신, lost wakeup 방지 | global queue를 injection queue로 축소 |
-| **단일 global runnable queue** | work stealing |
-| shutdown, correctness test | batch/quantum 튜닝 |
+| 단일 global runnable queue | work stealing |
+| shutdown, correctness test | 큐별 알림 정책, 큐 확인 순서 |
 
 첫 구현의 진짜 위험은 scheduling throughput이 아니라 lifetime과 상태 전이의
-correctness다. 단일 큐로 semantics를 먼저 검증한 뒤 scheduler를 교체한다.
+correctness였다. 단일 큐로 semantics를 먼저 검증한 뒤 scheduler를 교체했다.
 
-### 목표 스케줄러 구조
+남은 튜닝 항목(batch/quantum, steal victim 선택)은 **측정 후 판단**이며
+ADR-0014의 "Revisit when"에 조건이 적혀 있다.
 
-> **현재의 단일 global queue는 최종 구조가 아니라 baseline scheduler다.**
-> 폐기하고 다시 만드는 것이 아니라, 그 위에 아래 구조로 확장한다.
+### 스케줄러 구조
 
 ```
                     Global Injection Queue
@@ -47,43 +47,55 @@ correctness다. 단일 큐로 semantics를 먼저 검증한 뒤 scheduler를 교
 | Global Injection Queue | **MPMC** | producer 여럿 → worker 여럿이 꺼감 |
 | Worker Local Runnable | **work-stealing deque** | owner는 `push_bottom`/`pop_bottom`, thief는 `steal_top` |
 
+local deque는 worker당 `std::mutex` + `std::deque`다. 근거와 Chase-Lev를 쓰지 않은
+이유는 ADR-0014에 있다.
+
 **어디에 넣는지의 기준은 locality다.**
 
-- worker가 실행 중에 만들어낸 runnable → 그 worker의 local deque (locality 활용)
+- worker가 실행 중에 만들어낸 runnable → 그 worker의 local deque
 - 외부 thread, I/O completion thread 등 특정 worker와 연고가 없는 runnable → injection queue
+
+판정은 worker loop가 진입할 때 스스로 세팅하는 thread_local `{ActorRuntime*, index}`로
+한다. **런타임 포인터를 함께 보는 것이 필수다** — `ActorSystem`이 둘 이상일 때
+인덱스만 보면 시스템 A의 worker가 만든 B의 runnable이 A의 deque로 샌다
+(`CrossRuntimeIsolation`이 잡는다).
 
 owner가 LIFO로 최근 work를 처리하고 thief가 반대쪽 오래된 work를 가져가는 것은
 **locality/부하분산 heuristic이지 correctness 조건이 아니다.** Actor가 특정 worker에
 고정되지 않는다는 성질(§2의 "Actor는 어느 worker에서든 실행될 수 있다")은 그대로다.
 
-목표 worker loop:
+### worker loop
 
 ```
-local deque pop  → 있으면 실행
-없으면 global injection queue
-없으면 다른 worker의 deque에서 steal 시도
-그래도 없으면 sleep
+매 61번째 반복  → injection 먼저, 없으면 local
+그 외           → local 먼저, 없으면 injection
+둘 다 없으면     → steal 시도
+그래도 없으면    → sleep (§5)
 ```
 
-정확한 우선순서는 **2차 설계에서 정할 정책**이다. 여기 적힌 순서는 전형적인 형태일 뿐
-확정이 아니다.
+**61회 주기가 없으면 injection이 굶는다.** local deque를 채우는 것은 handler가 만든
+runnable이고, 그게 꾸준한 워크로드에서는 외부 스레드·I/O completion의 runnable이
+무한정 밀린다. `61`은 최적값이 아니라 baseline이다(ADR-0014).
 
-### 2차에서 반드시 결정해야 할 것 — 큐별 알림 정책
+한 번의 local 처리가 최대 32건(budget)이므로 **injection 확인 간격은 최악의 경우
+메시지 1,952건이다.** 둘 중 하나를 바꾸면 다른 쪽의 의미도 바뀐다.
 
-local deque를 넣으면 **notify가 필요한 조건이 큐마다 갈린다.**
+### 큐별 알림 정책
 
-| 큐 | notify |
-|---|---|
-| Global injection | **필요.** producer가 외부일 수 있고 worker 전부가 자고 있을 수 있다 |
-| Local deque (owner push) | owner는 깨어 있으니 자기 일엔 불필요. **그러나 남이 훔치려면 알아야 한다** |
+**두 큐는 notify가 필요한 이유가 다르다.** 같은 정책을 쓰지 않는다.
 
-local push마다 notify하면 local deque를 둔 이득(중앙 경합 회피)이 사라진다. 반대로
-절대 notify하지 않으면 **한 worker의 deque에 일이 쌓이는 동안 나머지가 자고 있는**
-상황이 생긴다. correctness 문제는 아니지만 throughput 유실이고, §5의 lost wakeup과
-같은 계열의 문제가 부하 분산 층위에서 재현되는 셈이다.
+| 큐 | notify | 빠뜨리면 |
+|---|---|---|
+| Global injection | **항상** | 아무도 깨지 않는다. **시스템이 멈춘다** |
+| Local deque | **유휴 worker가 있을 때만** | owner가 결국 처리한다. 부하 분산만 잃는다 |
 
-흔한 해법은 `empty → non-empty` 전이에서만 notify하거나, 유휴 worker 수를 세어 0보다
-클 때만 깨우는 것이다. 이 항목은 2차 착수 시 `OPEN_QUESTIONS.md`에 Q-008로 연다.
+local push의 notify는 **correctness 조건이 아니라 heuristic이다.** push한 주체가 그
+deque의 owner이고, owner는 잠들기 전에 자기 deque를 확인하므로 진행은 보장된다.
+그래서 여기에만 조건을 붙인다.
+
+"유휴 worker가 있는가"는 `_idleCount`로 판정하며, **이 카운터는 sleep 락 안에서
+증감한다.** 락 밖에서 세면 producer가 0을 읽고 notify를 건너뛴 직후 worker가 잠드는
+창이 생긴다.
 
 ---
 
@@ -218,48 +230,61 @@ lock-free 메일박스로 바꾸면 "비었다"의 의미를 여기서 다시 �
 
 ## 5. 프로토콜 B — Worker sleep lost wakeup 방지
 
-**유실되는 것:** runnable 큐에 ACB가 있는데 모든 worker가 자고 있는 상태.
+**유실되는 것:** runnable이 어딘가에 있는데 모든 worker가 자고 있는 상태.
 런타임 전체가 멈춘다.
 
 ```
 EnqueueRunnable(acb)              Worker loop
 --------------------              -----------
-runnable.enqueue(acb)             try_dequeue → 실패
+어느 큐에 넣을지 고르고 push       모든 소스 비었음 확인 → 실패
 { lock(sleep); }  ← 빈 임계구역    lock(sleep)
 notify_one()                        stopping이면 종료
-                                    try_dequeue 재확인 → 실패
+                                    idleCount += 1
+                                    모든 소스 재확인 → 실패
                                     cv.wait(lock)   ← 여기서 락 해제
+                                    idleCount -= 1
 ```
 
 **빈 임계구역이 장치다.** worker가 "재확인 → wait 진입" 구간에 있으면 `EnqueueRunnable`은
 락을 얻지 못해 대기하고, worker가 `wait`에 들어가 락을 놓은 뒤에야 notify가 나간다.
-worker가 아직 구간에 들어오지 않았다면 재확인 시점에 enqueue가 이미 끝나 있어 큐에서
-발견한다.
+worker가 아직 구간에 들어오지 않았다면 재확인 시점에 push가 이미 끝나 있어 발견한다.
 
 - `cv.wait`은 spurious wakeup을 허용하는 **루프 안에서** 쓴다.
+
+### 재확인의 범위
+
+> **sleep 직전 재확인은 자기 local deque, injection queue, 그리고 다른 worker의
+> deque까지 모두 본다.** 전부 sleep 락을 **보유한 채** 수행한다.
+
+큐가 셋으로 늘어도 **프로토콜의 구조는 바뀌지 않았다.** 넓어진 것은 "큐가 비었나"의
+정의뿐이다.
+
+다른 worker의 deque까지 보는 이유는 위 "큐별 알림 정책"의 heuristic 때문이다.
+보지 않으면 이런 순서가 성립한다 — A가 자기 deque에 push(유휴 0이라 notify 생략)
+→ B가 잠들며 재확인 → 자기 것과 injection만 비어 있음을 보고 수면. A가 긴 handler에
+묶이면 그 일은 A가 풀려날 때까지 멈춘다.
+
+비용은 잠들기 직전에만 드는 O(worker 수) 스캔이다. hot path가 아니지만 worker 수가
+커지면 재검토 대상이다(ADR-0014).
 
 ### 유지해야 할 invariant
 
 > **모든 runnable 생성은 Scheduler의 scheduling entry point를 거치며,
 > 어느 큐에 들어가든 필요한 wakeup notification이 함께 수행된다.**
 
-"모든 runnable을 global queue에 넣는다"는 뜻이 **아니다.** 2차에서 `EnqueueRunnable`은
-locality를 보고 **어느 큐에 넣을지 결정하는 단일 진입점**이 된다.
+"모든 runnable을 global queue에 넣는다"는 뜻이 **아니다.** `EnqueueRunnable`은
+locality를 보고 **어느 큐에 넣을지 결정하는 단일 진입점**이다.
 
 ```
 EnqueueRunnable(acb)
-    ├─ 현재 worker에서 locality를 활용할 수 있다  → CurrentWorker.LocalDeque.push
-    └─ 그렇지 않다                                → GlobalInjectionQueue.enqueue
-    ↓
-    필요하면 idle worker notify   ← 큐 종류와 무관하게 이 단계를 건너뛰지 않는다
+    ├─ tls.runtime == this  → 그 worker의 LocalDeque.push_bottom
+    │                          유휴 worker가 있을 때만 notify
+    └─ 그렇지 않다           → GlobalInjectionQueue.enqueue
+                               항상 notify
 ```
 
 위험한 것은 **큐에 직접 넣고 이 진입점을 우회하는 경로**다. 그 경로에서만 worker가
-깨지 않으므로 재현이 산발적이고 원인을 찾기 어렵다. 지금은 경로가 하나뿐이라 실수할
-여지가 없지만, local deque가 생기는 순간 경로가 늘어난다.
-
-큐별로 notify가 필요한 조건이 다르다는 점은 범위 절의 "2차에서 반드시 결정해야 할 것"
-참고.
+깨지 않으므로 재현이 산발적이고 원인을 찾기 어렵다. 큐가 셋이 된 지금 더 중요해졌다.
 
 ---
 
@@ -468,11 +493,14 @@ public:
 | | `SpawnFromHandler` |
 | Handler 예외 후 추가 메시지를 처리하지 않는다 | `HandlerExceptionStopsActor` |
 | **Stop 이후 pending 메시지를 처리하지 않는다** (consumption boundary, §6) | `SelfStopFromHandler` |
+| local deque에 쌓인 일을 다른 worker가 나눠 가진다 | `WorkStealingBalancesLoad` |
+| worker가 아닌 스레드의 `Send`도 처리된다 | `InjectionFromExternalThread` |
+| local 작업이 꾸준해도 injection이 굶지 않는다 | `InjectionNotStarvedByLocalWork` |
+| **다른 런타임의 local deque로 runnable이 새지 않는다** | `CrossRuntimeIsolation` |
 
 **L1은 락 보유를 직접 관측하지 않는다.** 대신 어겼을 때 반드시 데드락하는 세 가지
 사용 패턴을 테스트한다. 관측 가능한 결과로 invariant를 잡는 방식이다.
 
-work stealing 테스트는 1차 범위 밖이다.
 
 ---
 

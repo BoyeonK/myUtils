@@ -9,7 +9,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 현재 구성 요소는 셋이다.
 
 - **송신 버퍼** (`SendBuffer.h`) — thread-local bump allocator + refcounted chunk. 완성된 컴포넌트다.
-- **Actor Runtime** (`Actor.h`) — MPSC mailbox + atomic 상태 머신 + worker pool. 스케줄러는 **baseline(단일 global queue)** 단계이고 목표는 work-stealing 구조다. 실행 규약은 `design/actor-runtime.md`, 근거는 ADR-0010~0012.
+- **Actor Runtime** (`Actor.h`) — MPSC mailbox + atomic 상태 머신 + worker pool. 스케줄러는 **global injection queue + worker-local work-stealing deque**다. 실행 규약은 `design/actor-runtime.md`, 근거는 ADR-0010~0012와 0014.
 - **계측** (`Profiling.h`) — 비용 3단 구분. 1·2단은 항상 켜져 있고 3단만 `SetProfilingEnabled()`로 제어한다(ADR-0013). ADR들이 정한 재검토 조건을 재빌드 없이 관측하기 위한 것이다.
 
 액터/메시지 시스템, 오브젝트 풀, MPSC 큐, 타이머 스케줄러, `ThreadManager`, 그리고 전역 변수 일체를 **2026-09-15에 전부 제거했다.** 전면 재작성 대상이었고, 그 위에 무언가를 쌓는 것보다 비우고 다시 세우는 편이 낫다는 판단이었다. 필요하면 git 히스토리(`2ce7019` 이전)에서 참고할 수 있다.
@@ -116,12 +116,19 @@ ADR들이 "이 조건이 관측되면 재검토한다"고 달아둔 조건을 **
 - **`Actor::Handle()`을 mailbox 락을 쥔 채 호출하지 말 것.** self-send / self-stop / handler 안에서의 `Spawn`이 전부 여기에 의존한다. **"배치 처리니까 락을 한 번만 잡자"는 최적화가 자연스럽게 들어올 자리다.** 어기면 `SelfSendFromHandler` / `SelfStopFromHandler` / `SpawnFromHandler` 테스트가 타임아웃한다.
 - **drain 루프는 pop 전에 mailbox 락 안에서 state가 `RUNNING`인지 확인한다.** `Stop`은 state만 바꿀 뿐 worker는 여전히 루프 안이라, 이 검사가 없으면 Stop 이후에도 pending을 budget 한도까지 처리한다. 검사를 `Handle()` 반환 직후로 옮기면 검사와 pop 사이에 창이 생겨 경계가 무너진다 — **락 안이어야 한다.** `SelfStopFromHandler`가 잡는다.
 - **`Stop()`의 이전 상태는 CAS 루프로 포착할 것.** `load` 후 `store`로 쓰면 그 사이에 producer가 `IDLE → SCHEDULED`로 바꿔(이 전이는 mailbox 락 밖에서 일어난다) Finalize 주체 판정이 틀린다.
-- **runnable을 만드는 경로는 `EnqueueRunnable` 하나뿐이다.** 어느 큐에 넣든 worker 깨우기가 거기서 묶인다. 2차에서 이 함수는 "local deque냐 injection queue냐"를 고르는 진입점이 된다 — **한 곳에 모으는 게 아니라 진입점을 우회하지 않는 것**이 규칙이다. 우회하면 그 경로에서만 worker가 깨지 않는다.
+- **runnable을 만드는 경로는 `EnqueueRunnable` 하나뿐이다.** 이 함수가 "local deque냐 injection queue냐"를 고르고 필요한 notify까지 한다 — **한 곳에 모으는 게 아니라 진입점을 우회하지 않는 것**이 규칙이다. 우회하면 그 경로에서만 worker가 깨지 않는다.
+- **local deque로 보낼지 판정할 때 worker index만 보지 말 것.** `thread_local`에 담긴 `ActorRuntime*`도 함께 확인한다. `ActorSystem`이 둘 이상이면 시스템 A의 worker가 만든 B의 runnable이 A의 deque로 샌다. `CrossRuntimeIsolation`이 잡는다.
+- **유휴 worker 수(`_idleCount`)는 sleep 락 안에서 증감할 것.** 락 밖에서 세면 producer가 0을 읽고 notify를 건너뛴 직후 worker가 잠드는 창이 생긴다.
 - **`Send()`가 `true`여도 전달은 보장되지 않는다.** accept되었다는 뜻이며, 이후 `Stop`/`Shutdown`이 버릴 수 있다.
 - `Stop()`은 graceful stop이 아니다. pending 메시지를 버린다.
 - Registry를 순회하며 `Finalize`하지 말 것. `Finalize`가 스스로를 unregister하므로 스냅샷을 만든 뒤 락 밖에서 처리한다.
 
-**현재 스케줄러는 baseline이다.** 단일 global runnable queue만 쓰고 worker-local deque도 work stealing도 없다. 이건 최종 구조가 아니라 correctness를 먼저 검증하려고 단순화한 1차 구현이며, 목표 구조(injection queue + worker-local work-stealing deque)와 2차에서 결정할 항목은 `design/actor-runtime.md`의 "목표 스케줄러 구조" 절에 있다. **현재 구조를 최종안으로 간주하고 최적화하지 말 것.**
+**스케줄러는 global injection queue(MPMC) + worker-local deque + work stealing이다.** 2026-09-15에 단일 global queue baseline에서 교체했다. 구조와 정책은 `design/actor-runtime.md`의 "스케줄러 구조" 절, 근거는 ADR-0014에 있다. 두 정책 상수는 **측정값이 아니라 baseline**이므로 임의로 바꾸지 말고 `SnapshotStats()`로 문제를 먼저 확인할 것.
+
+- `INJECTION_POLL_INTERVAL`(61) — 몇 번에 한 번 injection을 local보다 먼저 보는가. 없으면 local deque가 차 있는 동안 injection이 굶는다.
+- `DEFAULT_MESSAGE_BUDGET`(32) — **위 값과 상호작용한다.** 한 번의 local 처리가 최대 32건이라 injection 확인 간격은 최악의 경우 메시지 1,952건이다. 한쪽을 바꾸면 다른 쪽의 의미도 바뀐다.
+
+**두 큐는 notify 정책이 다르고, 그게 의도다.** injection은 항상 깨우고(correctness — 빠뜨리면 아무도 안 깬다), local은 유휴 worker가 있을 때만 깨운다(heuristic — 빠뜨려도 owner가 결국 처리한다). **"일관성 있게 통일하자"고 합치지 말 것.**
 
 ### 송신 버퍼 (`SendBuffer.h` / `SendBuffer.cpp`)
 
