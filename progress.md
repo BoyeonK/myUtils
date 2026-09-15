@@ -12,6 +12,10 @@
 - [x] (2026-09-15 #2) chunk 수명을 refcount로 전환하면서 `SendBufferManager`가 Current Chunk 참조를 하나 보유하도록 했다. outstanding `SendView`만 세면 마지막 I/O 완료 순간 사용 중인 chunk가 pool로 반환되어 두 worker가 같은 chunk에 동시 bump allocation하는 use-after-free가 발생한다. 이 참조 덕분에 "refcount == 0"이 "아무도 이 chunk를 모른다"와 정확히 같은 뜻이 된다.
 - [x] (2026-09-15 #3) `SendBuffer` 계열을 레거시 코드와 양방향 분리. `ASSERT_CRASH`를 `MyUtils/Assert.h`로 추출해 PCH 암묵 의존(및 그에 딸려오던 `windows.h`, `using namespace std;`)을 끊었고, `ThreadManager::DestroyTLS()`의 `ReleaseCurrentChunk()` 호출도 제거했다. 후자는 `SendBufferManager`가 함수 지역 `thread_local`이라 소멸자가 알아서 반납하므로 불필요했다.
 
+### 코어 / 스레드
+
+- [x] (2026-09-15 #9) 액터/메시지 시스템, 오브젝트 풀, MPSC 큐, 타이머 스케줄러를 저장소에서 제거했다. 전부 전면 재작성 대상이라, 그 위에 무언가를 쌓는 것보다 비우고 다시 세우는 편이 낫다고 판단했다. 연쇄로 `GlobalVariables`의 전역 4개와 `ThreadManager`의 액터 구동 메서드 2개도 정리해 라이브러리는 송신 버퍼 + 스레드 런처만 남았다.
+
 ### 빌드 · 테스트 인프라
 
 - [x] (2026-09-15 #4) MSVC `/utf-8` 옵션 추가. UTF-8 소스를 CP949로 읽으면서 한글 주석 끝 바이트가 lead byte로 오해돼 줄바꿈을 삼키고 다음 줄 선언이 주석에 먹히는 실제 빌드 실패가 있었다(증상은 "멀쩡히 있는 멤버를 못 찾는다"는 C2039). 공개 헤더에도 한글 주석이 있어 PUBLIC으로 전파한다.
@@ -21,35 +25,49 @@
 ### 문서
 
 - [x] (2026-09-15 #0) `CLAUDE.md` 신규 작성. PCH 암묵 의존, 공개 헤더 자립 규칙, 액터 단일 실행 계약, 스케줄러의 단일 스레드 요구 등 여러 파일을 같이 읽어야 파악되는 것들을 정리했다.
+- [x] (2026-09-15 #7) 설계 근거를 코드 주석에서 `design/adr/`의 ADR 6개로 옮겼다. 주석이 지나치게 빡빡해 읽기 어려웠고, "왜 이 모양인가"는 코드 옆에 둘 이유가 없다. 대신 "이 줄을 바꾸면 깨지는 것"은 코드에 남기고 ADR 포인터를 10곳에 심었으며, `CLAUDE.md`의 송신 버퍼 섹션도 결정 근거 나열에서 지켜야 할 규칙 5개로 축소했다.
+- [x] (2026-09-15 #8) `design/OPEN_QUESTIONS.md` 신설. 여러 세션과 다른 AI 에이전트가 같은 문서를 보고 이어서 논의하는 것이 목적이라, 각 항목에 "무엇이 이 질문을 닫는가"를 못박고 서명·날짜, ADR 재논쟁 금지, 측정 대기 항목에 의견 쌓지 않기를 참여 규칙으로 명시했다. `progress.md` TODO에서 결정 대기 5건을 빼고 링크만 남겨 중복을 없앴다.
 
 ---
 
 ## TODO
 
+**오늘 바로 착수할 수 있는 것**만 여기 적는다. 먼저 골라야 할 게 있는 사안은
+[`design/OPEN_QUESTIONS.md`](design/OPEN_QUESTIONS.md)에 있다.
+
 ### 높음
 
-- [ ] 레거시 코드 전면 정비 (`pch.h` 포함). 정비 시 각 `.cpp`가 PCH 대신 `MyUtils/Assert.h`를 직접 include하도록 옮길 것. `pch.h`에 `NOMINMAX`가 없어 `min`/`max` 매크로가 살아 있는 것도 같이 판단.
-- [ ] `ObjectPool` 스레드 종료 시 로컬 프리리스트 누수. `thread_local std::vector<T*>`가 소멸할 때 최대 2000개 블록을 전역 풀로 돌려주지 않고 버린다. 스레드를 반복 생성/조인하면 누적된다.
-- [ ] `ObjectPool` TLS 소멸 순서에 따른 UAF 가능성. `shared_ptr` deleter가 `GetLocalPool()`을 호출하므로, 풀 객체를 든 다른 `thread_local`이 로컬 풀보다 늦게 소멸하면 파괴된 vector를 건드린다. 타입마다 등록 순서가 달라 재현이 불규칙하다.
+- [ ] `pch.h` 정리. 레거시를 걷어낸 뒤 PCH에 의존하는 파일은 `GlobalVariables.cpp`와 `Thread.cpp` 둘뿐이고 둘 다 작다. 두 파일이 `MyUtils/Assert.h`를 직접 include하도록 옮기면 PCH 자체를 없앨 수 있는지 판단할 것. `NOMINMAX`가 없어 `min`/`max` 매크로가 살아 있는 것도 같이 본다.
 
 ### 중간
 
-- [ ] `Actor::PostTask` hot path의 할당 제거. `ObjectPool<Task>::Acquire`가 `shared_ptr` 커스텀 deleter를 쓰는 탓에 메시지마다 control block malloc이 발생하고, `Task`의 `std::function`도 캡처 크기에 따라 SBO를 넘기면 추가 할당한다. 풀을 도입한 이득이 상당 부분 상쇄된다.
-- [ ] `SendBuffer` 실측 후 튜닝. `DEFAULT_CHUNK_CAPACITY`(16 KB), `LARGE_ALLOCATION_THRESHOLD`, `DEFAULT_POOL_IDLE_LIMIT`은 전부 correctness와 무관한 값이다. 판단 근거는 `SnapshotStats()`의 이용률, 살아있는 chunk 수, large path 비율, pool 히트율.
-- [ ] `ObjectPool` 자잘한 결함들: `::operator new(sizeof(T))`가 over-aligned 타입의 정렬을 보장하지 않음, `enqueue_bulk` 반환값 무시로 OOM 시 블록 유실, `AcquireRaw`/`ReturnRaw` 비대칭(후자가 소멸자를 부르지 않음), `MAX_LOCAL_SIZE` 임계 비교가 `>`라서 첫 플러시마다 벡터 재할당.
+- [ ] 대표 워크로드에서 `SnapshotStats()` 수집. Q-001·Q-002·Q-003이 전부 이 데이터를 기다리고 있어서, 이걸 하면 질문 세 개가 한 번에 닫힌다.
 
 ### 낮음
 
-- [ ] `TLTask` / `TLTaskQueue` 소비 루프 구현. 선언만 되어 있고 아직 어떤 루프도 처리하지 않는다.
-- [ ] 브로드캐스트 pinning 대응 검토. fanout이 큰 패킷을 exact-sized standalone 버퍼로 빼면 느린 클라이언트가 chunk 전체를 붙잡는 것을 막을 수 있다. 계측으로 실제 문제인지 확인한 뒤 판단.
-- [ ] `ChunkRef`를 intrusive refcount로 전환 검토. 타입 별칭으로 격리해뒀으므로 교체 비용은 낮지만, control block 비용이 chunk 수명마다 발생하므로 profiling 전에는 불필요.
+- [ ] 액터/메시지 시스템 재구축. 2026-09-15에 기존 구현을 제거했으므로 백지에서 시작한다. 직전 구현은 git 히스토리(`2ce7019` 이전)에 있고, 거기서 가져갈 성질은 "액터 하나는 동시에 최대 한 스레드에서만 실행된다"는 계약과 weak_ptr 기반 태스크 정도다. 메시지 한 건당 힙 할당 0회를 목표로 잡을 것.
+
+---
+
+## 결정 대기
+
+내용은 [`design/OPEN_QUESTIONS.md`](design/OPEN_QUESTIONS.md)에 있다. 여기에는 목록만 둔다.
+
+| # | 질문 | 막힌 이유 |
+|---|---|---|
+| Q-001 | SendBuffer 튜닝 값 세 개 | 측정 |
+| Q-002 | ChunkRef를 intrusive refcount로 바꿀 것인가 | 측정 |
+| Q-003 | 브로드캐스트·coalescing pinning에 대응할 것인가 | 측정 |
+| Q-006 | `WorkerContext` 개념을 도입할 것인가 | 설계 판단 (지향의 문제) |
+
+Q-004·Q-005·Q-007은 2026-09-15 무효 처리했다. 대상 코드(`Actor`, `ObjectPool`)를 저장소에서 제거했기 때문이다. 번호는 재사용하지 않는다.
 
 ---
 
 ## 알려진 이슈 · 메모
 
 - `ASSERT_CRASH`에 `NDEBUG` 가드가 없어 릴리즈에서도 프로세스가 죽는다. 의도된 동작이므로 계약 위반에만 쓰고, 복구 가능한 실패는 반환값으로 알릴 것.
-- `Actor::_messageCount`는 `Push`에서 증가만 하고 어디서도 감소하지 않으며 읽는 곳도 없다. `prevCount` 지역 변수도 사용되지 않는다. 미완성으로 보이므로 액터 정비 시 의도를 확인할 것.
-- `ActorMessageScheduler::AddAndDistribute`는 `_orderedMessages`를 락 없이 다루므로 **반드시 한 스레드에서만** 호출해야 한다. 이 레포에는 호출하는 루프가 없으므로 소비자 쪽 규율에 달려 있다.
+- 2026-09-15에 액터/메시지 시스템, 오브젝트 풀, MPSC 큐, 타이머 스케줄러를 전부 제거했다. 라이브러리는 현재 **송신 버퍼 + 스레드 런처**뿐이다. 직전 구현은 git 히스토리(`2ce7019` 이전)에 있다.
 - `SnapshotStats()`는 살아 있는 스레드의 카운터를 잠금 없이 읽는다. 통계 목적의 의도된 benign race이며, 정확한 값이 필요하면 대상 스레드를 join한 뒤 읽어야 한다.
 - 소스와 헤더는 BOM 없는 UTF-8이다. MSVC에서 `/utf-8`을 빼면 조용히 깨진다.
+- 문서는 네 곳으로 나뉜다 — 코드 주석 / `CLAUDE.md` / `design/adr/` / 이 파일. 어디에 무엇을 쓰는지는 `CLAUDE.md`의 "문서 구조" 절에 있다. 같은 내용을 두 곳에 쓰지 말 것.

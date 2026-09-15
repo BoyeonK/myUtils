@@ -99,12 +99,11 @@ namespace MyUtils::Network {
 	//
 	//   유휴 chunk를 보관하는 프로세스 전역 풀.
 	//
-	//   chunk의 deleter가 pool의 소유권 지분을 캡처하므로, pool은 자기가 내준
-	//   chunk 전부보다 반드시 오래 산다. 덕분에 "반환은 언제나 안전하다"가
-	//   임베딩하는 쪽의 shutdown 순서와 무관하게 국소적으로 보장된다.
+	//   [주의] chunk deleter가 pool의 소유권 지분을 캡처한다. pool이 자기가 내준
+	//   chunk 전부보다 오래 살아야 반환이 안전하기 때문이다. 이 캡처를 없애면
+	//   종료 시점에 이미 파괴된 pool로 반환하는 경로가 생긴다. ADR-0004
 	//
-	//   유휴 chunk는 raw 포인터로만 보관하므로 pool -> chunk -> pool 순환은
-	//   생기지 않는다.
+	//   유휴 chunk는 raw 포인터로만 보관하므로 순환 참조는 생기지 않는다.
 	// =======================================================================
 	namespace {
 
@@ -291,16 +290,12 @@ namespace MyUtils::Network {
 		if (_chunk == nullptr)
 			return;
 
-		// 조건 1: 이 thread가 이 chunk의 owner인가?
-		//   chunk는 한 시점에 최대 하나의 manager에게만 Current일 수 있다
-		//   (manager가 ChunkRef를 하나 들고 있으므로 pool이 다른 worker에게 내줄
-		//   수 없다). 따라서 내 TLS manager의 Current와 같다면 내가 owner임이
-		//   구조적으로 증명된다. thread id 비교도 atomic도 필요 없다.
+		// 두 조건은 서로 다른 것을 증명하므로 둘 다 필요하다. 하나만 빼도 깨진다.
+		//   1. Current == 내 chunk : 내가 owner다. _offset을 써도 레이스가 없다
+		//   2. 커서 == 내 끝        : 내 뒤에 할당이 없다. 남의 영역을 안 침범한다
+		// 왜 1번이 owner임을 "증명"하는지는 ADR-0005 참고.
 		if (SendBufferManager::Current().CurrentChunk().get() != _chunk.get())
 			return;
-
-		// 조건 2: 내 뒤에 다른 allocation이 없는가?
-		//   있으면 되돌릴 때 남의 영역을 침범한다.
 		if (_chunk->Offset() != _offset + _capacity)
 			return;
 
@@ -349,7 +344,6 @@ namespace MyUtils::Network {
 		stats.reservedBytes += capacity;
 
 		// 임계값을 넘는 요청은 current chunk를 교체하지 않고 전용 chunk로 간다.
-		// current chunk에 남은 공간이 큰 요청 하나 때문에 버려지지 않는다.
 		if (capacity > LARGE_ALLOCATION_THRESHOLD) {
 			stats.largeAllocCount += 1;
 
@@ -369,9 +363,9 @@ namespace MyUtils::Network {
 
 		// 남은 공간이 모자라다. chunk를 교체한다.
 		//
-		// "교체 먼저, 이전 참조 해제 나중" 순서를 지켜야 한다. shared_ptr의 이동
-		// 대입은 새 값을 자리에 넣은 뒤 옛 값을 파괴하므로 이 순서가 보장된다.
-		// 반대 순서라면 이전 chunk가 pool로 돌아간 뒤 잠시 dangling 상태가 된다.
+		// [주의] "교체 먼저, 이전 참조 해제 나중" 순서를 지켜야 한다. shared_ptr의
+		// 이동 대입은 새 값을 자리에 넣은 뒤 옛 값을 파괴하므로 이 순서가 보장된다.
+		// 이전 chunk를 먼저 놓으면 그 사이 pool로 반환되어 잠시 dangling이 된다.
 		_current = GlobalPool().Acquire();
 		stats.chunkAcquireCount += 1;
 
