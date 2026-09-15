@@ -9,17 +9,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 현재 구성 요소는 셋이다.
 
 - **송신 버퍼** (`SendBuffer.h`) — thread-local bump allocator + refcounted chunk. 완성된 컴포넌트다.
-- **Actor Runtime** (`Actor.h`) — MPSC mailbox + atomic 상태 머신 + worker pool. 실행 규약은 `design/actor-runtime.md`, 근거는 ADR-0010~0012.
+- **Actor Runtime** (`Actor.h`) — MPSC mailbox + atomic 상태 머신 + worker pool. 스케줄러는 **baseline(단일 global queue)** 단계이고 목표는 work-stealing 구조다. 실행 규약은 `design/actor-runtime.md`, 근거는 ADR-0010~0012.
 - **계측** (`Profiling.h`) — 비용 3단 구분. 1·2단은 항상 켜져 있고 3단만 `SetProfilingEnabled()`로 제어한다(ADR-0013). ADR들이 정한 재검토 조건을 재빌드 없이 관측하기 위한 것이다.
-- **스레드 런처** (`Thread.h`) — `ThreadManager`의 launch/join이 전부. **현재 라이브러리의 어떤 것도 이걸 거쳤는지 묻지 않는다**(ADR-0009). 편의 유틸리티로 남아 있다.
 
-액터/메시지 시스템, 오브젝트 풀, MPSC 큐, 타이머 스케줄러, 그리고 전역 변수 일체를 **2026-09-15에 전부 제거했다.** 전면 재작성 대상이었고, 그 위에 무언가를 쌓는 것보다 비우고 다시 세우는 편이 낫다는 판단이었다. 필요하면 git 히스토리(`2ce7019` 이전)에서 참고할 수 있다.
+액터/메시지 시스템, 오브젝트 풀, MPSC 큐, 타이머 스케줄러, `ThreadManager`, 그리고 전역 변수 일체를 **2026-09-15에 전부 제거했다.** 전면 재작성 대상이었고, 그 위에 무언가를 쌓는 것보다 비우고 다시 세우는 편이 낫다는 판단이었다. 필요하면 git 히스토리(`2ce7019` 이전)에서 참고할 수 있다.
 
 ## 현재 상태: 스레드 관리 주체에 묶이지 않는다
 
-**지금 있는 것들은 어느 스레드에서 불려도 동작한다.** `SendBuffer`는 `ThreadManager`를
-전혀 거치지 않고, 생 `std::thread`에서 정상 동작하는 것이 검증되어 있다. 전역 변수와
-`thread_local` 전역도 하나도 없다. 지향은 프레임워크보다 **부품 모음** 쪽이다(ADR-0009).
+**지금 있는 것들은 어느 스레드에서 불려도 동작한다.** 스레드를 만들거나 관리하는 코드가
+라이브러리에 아예 없고, 생 `std::thread`에서 정상 동작하는 것이 테스트로 검증되어 있다.
+전역 변수와 `thread_local` 전역도 하나도 없다. 지향은 프레임워크보다 **부품 모음**
+쪽이다(ADR-0009).
 
 그래서 새 코드를 쓸 때 이 방식을 **먼저 검토한다.**
 
@@ -115,20 +115,12 @@ ADR들이 "이 조건이 관측되면 재검토한다"고 달아둔 조건을 **
 
 - **`Actor::Handle()`을 mailbox 락을 쥔 채 호출하지 말 것.** self-send / self-stop / handler 안에서의 `Spawn`이 전부 여기에 의존한다. **"배치 처리니까 락을 한 번만 잡자"는 최적화가 자연스럽게 들어올 자리다.** 어기면 `SelfSendFromHandler` / `SelfStopFromHandler` / `SpawnFromHandler` 테스트가 타임아웃한다.
 - **`Stop()`의 이전 상태는 CAS 루프로 포착할 것.** `load` 후 `store`로 쓰면 그 사이에 producer가 `IDLE → SCHEDULED`로 바꿔(이 전이는 mailbox 락 밖에서 일어난다) Finalize 주체 판정이 틀린다.
-- **runnable을 만드는 경로는 `EnqueueRunnable` 하나뿐이다.** 큐 삽입과 worker 깨우기가 거기서 묶인다. work stealing을 넣을 때 이걸 우회하면 그 경로에서만 worker가 깨지 않는다.
+- **runnable을 만드는 경로는 `EnqueueRunnable` 하나뿐이다.** 어느 큐에 넣든 worker 깨우기가 거기서 묶인다. 2차에서 이 함수는 "local deque냐 injection queue냐"를 고르는 진입점이 된다 — **한 곳에 모으는 게 아니라 진입점을 우회하지 않는 것**이 규칙이다. 우회하면 그 경로에서만 worker가 깨지 않는다.
 - **`Send()`가 `true`여도 전달은 보장되지 않는다.** accept되었다는 뜻이며, 이후 `Stop`/`Shutdown`이 버릴 수 있다.
 - `Stop()`은 graceful stop이 아니다. pending 메시지를 버린다.
 - Registry를 순회하며 `Finalize`하지 말 것. `Finalize`가 스스로를 unregister하므로 스냅샷을 만든 뒤 락 밖에서 처리한다.
 
-work stealing은 아직 없다. 단일 global runnable queue만 쓴다.
-
-### 스레드 런처 (`Thread.h` / `Thread.cpp`)
-
-`ThreadManager`는 `std::thread`를 벡터에 모아 join하는 것이 전부다. TLS 초기화 훅(`InitTLS`/`DestroyTLS`)이 있었지만 초기화할 대상이 전부 죽은 전역이라 2026-09-15에 함께 제거했다.
-
-여기에 스레드별 초기화를 다시 넣으려 한다면, 그 순간 "그걸 거친 스레드여야 한다"는 전제가 생긴다는 점을 의식할 것. 그게 필요한 상황이면 그때 결정하면 되지만(ADR-0009), 무심코 들어가기 쉬운 자리다.
-
-`SendBuffer`가 `ThreadManager`를 전혀 거치지 않는 것이 현재의 예다 — chunk 수명은 refcount가, current chunk는 함수 지역 `thread_local SendBufferManager`가 관리하며 그 소멸자가 스레드 종료 시 알아서 반납한다. 생 `std::thread`에서도 정상 동작한다(검증 완료).
+**현재 스케줄러는 baseline이다.** 단일 global runnable queue만 쓰고 worker-local deque도 work stealing도 없다. 이건 최종 구조가 아니라 correctness를 먼저 검증하려고 단순화한 1차 구현이며, 목표 구조(injection queue + worker-local work-stealing deque)와 2차에서 결정할 항목은 `design/actor-runtime.md`의 "목표 스케줄러 구조" 절에 있다. **현재 구조를 최종안으로 간주하고 최적화하지 말 것.**
 
 ### 송신 버퍼 (`SendBuffer.h` / `SendBuffer.cpp`)
 

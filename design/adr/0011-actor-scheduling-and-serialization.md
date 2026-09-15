@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-09-15
+- Follow-up: 2026-09-15 — 아래 "후속" 참고. 단일 global queue는 최종 구조가 아니다.
 - 상세 규약: [design/actor-runtime.md](../actor-runtime.md) §2, §4, §5
 
 ## Context
@@ -106,3 +107,41 @@ correctness를 먼저 확보한다. acquire/release로 완화하는 것은 각 �
 
 budget 32건도 근거 있는 값이 아니라 출발점이다. 한 액터의 처리 지연과 worker 독점
 사이의 균형을 측정한 뒤 조정한다.
+
+## 후속 (2026-09-15)
+
+두 가지를 정정한다. 결정이 바뀐 것이 아니라 **서술이 부정확했던 것**이다.
+
+### 1. 단일 global queue는 최종 스케줄러 구조가 아니다
+
+위 "기각된 대안"의 `1차부터 work stealing`은 **시점에 대한 기각이지 구조에 대한 기각이
+아니다.** 목표 구조는 처음부터 이것이었다.
+
+```
+Global Injection Queue (MPMC) + Worker-local Work-Stealing Deque + Work Stealing
+```
+
+현재의 `_runnable`은 **baseline scheduler**이며, 2차에서 injection queue 역할로 축소되고
+그 앞에 worker-local deque가 붙는다. 자료구조 셋(mailbox=MPSC, injection=MPMC,
+local=work-stealing deque)의 역할 분리와 목표 worker loop는
+[actor-runtime.md](../actor-runtime.md)의 "목표 스케줄러 구조" 절에 있다.
+
+이 ADR이 그 구조를 적지 않았던 것은 **요구사항 원문을 삭제할 때 그 문서에만 있던
+내용을 옮기지 못했기 때문이다.** 끊어진 링크만 확인하고 고유 정보를 확인하지 않았다.
+
+### 2. `EnqueueRunnable` invariant의 정확한 형태
+
+위 Decision의 "큐 삽입 → handshake → notify"는 큐가 단수라 **"모든 runnable은 global
+queue로 간다"**로 읽힌다. 그런 뜻이 아니다.
+
+> **모든 runnable 생성은 Scheduler의 scheduling entry point를 거치며,
+> 어느 큐에 들어가든 필요한 wakeup notification이 함께 수행된다.**
+
+2차에서 `EnqueueRunnable`은 locality를 보고 **local deque와 injection queue 중 어디에
+넣을지 결정하는 단일 진입점**이 된다. 지켜야 할 것은 "한 곳에 모은다"가 아니라
+"진입점을 우회하지 않는다"이다.
+
+덧붙여, 큐마다 notify가 필요한 조건이 다르다는 점이 2차의 실제 난점이다 —
+local push마다 깨우면 local deque를 둔 이득이 사라지고, 전혀 깨우지 않으면 한 worker에
+일이 쌓이는 동안 나머지가 잔다. [actor-runtime.md](../actor-runtime.md)의
+"2차에서 반드시 결정해야 할 것" 참고.

@@ -10,17 +10,80 @@
 
 ## 범위
 
-1차 구현은 **correctness 확보까지**이고, 스케줄링 최적화는 그 다음이다.
+1차 구현은 **correctness 확보까지**이고, 스케줄링 구조는 그 다음이다.
 
-| 포함 | 제외 (다음 단계) |
+| 1차 (구현됨) | 2차 |
 |---|---|
-| Message / Actor / Mailbox / ControlBlock | worker-local deque |
-| 상태 머신, lost wakeup 방지 | work stealing |
-| **단일 global runnable queue** | local/global 역할 분리 |
-| shutdown, correctness test | batch/quantum 튜닝, 최적화 |
+| Message / Actor / Mailbox / ControlBlock | worker-local work-stealing deque |
+| 상태 머신, lost wakeup 방지 | global queue를 injection queue로 축소 |
+| **단일 global runnable queue** | work stealing |
+| shutdown, correctness test | batch/quantum 튜닝 |
 
 첫 구현의 진짜 위험은 scheduling throughput이 아니라 lifetime과 상태 전이의
 correctness다. 단일 큐로 semantics를 먼저 검증한 뒤 scheduler를 교체한다.
+
+### 목표 스케줄러 구조
+
+> **현재의 단일 global queue는 최종 구조가 아니라 baseline scheduler다.**
+> 폐기하고 다시 만드는 것이 아니라, 그 위에 아래 구조로 확장한다.
+
+```
+                    Global Injection Queue
+                          (MPMC)
+                            │
+              ┌─────────────┼─────────────┐
+              ▼             ▼             ▼
+           Worker 0      Worker 1      Worker 2
+           Local Deque   Local Deque   Local Deque
+              ↕             ↕             ↕
+               ─────── Work Stealing ───────
+```
+
+자료구조 셋의 역할이 다르므로 하나로 통일하지 않는다.
+
+| 자료구조 | 형태 | 이유 |
+|---|---|---|
+| Actor Mailbox | **MPSC** | producer 여럿 → 실행권을 가진 worker 하나 |
+| Global Injection Queue | **MPMC** | producer 여럿 → worker 여럿이 꺼감 |
+| Worker Local Runnable | **work-stealing deque** | owner는 `push_bottom`/`pop_bottom`, thief는 `steal_top` |
+
+**어디에 넣는지의 기준은 locality다.**
+
+- worker가 실행 중에 만들어낸 runnable → 그 worker의 local deque (locality 활용)
+- 외부 thread, I/O completion thread 등 특정 worker와 연고가 없는 runnable → injection queue
+
+owner가 LIFO로 최근 work를 처리하고 thief가 반대쪽 오래된 work를 가져가는 것은
+**locality/부하분산 heuristic이지 correctness 조건이 아니다.** Actor가 특정 worker에
+고정되지 않는다는 성질(§2의 "Actor는 어느 worker에서든 실행될 수 있다")은 그대로다.
+
+목표 worker loop:
+
+```
+local deque pop  → 있으면 실행
+없으면 global injection queue
+없으면 다른 worker의 deque에서 steal 시도
+그래도 없으면 sleep
+```
+
+정확한 우선순서는 **2차 설계에서 정할 정책**이다. 여기 적힌 순서는 전형적인 형태일 뿐
+확정이 아니다.
+
+### 2차에서 반드시 결정해야 할 것 — 큐별 알림 정책
+
+local deque를 넣으면 **notify가 필요한 조건이 큐마다 갈린다.**
+
+| 큐 | notify |
+|---|---|
+| Global injection | **필요.** producer가 외부일 수 있고 worker 전부가 자고 있을 수 있다 |
+| Local deque (owner push) | owner는 깨어 있으니 자기 일엔 불필요. **그러나 남이 훔치려면 알아야 한다** |
+
+local push마다 notify하면 local deque를 둔 이득(중앙 경합 회피)이 사라진다. 반대로
+절대 notify하지 않으면 **한 worker의 deque에 일이 쌓이는 동안 나머지가 자고 있는**
+상황이 생긴다. correctness 문제는 아니지만 throughput 유실이고, §5의 lost wakeup과
+같은 계열의 문제가 부하 분산 층위에서 재현되는 셈이다.
+
+흔한 해법은 `empty → non-empty` 전이에서만 notify하거나, 유휴 worker 수를 세어 0보다
+클 때만 깨우는 것이다. 이 항목은 2차 착수 시 `OPEN_QUESTIONS.md`에 Q-008로 연다.
 
 ---
 
@@ -174,8 +237,29 @@ worker가 아직 구간에 들어오지 않았다면 재확인 시점에 enqueue
 발견한다.
 
 - `cv.wait`은 spurious wakeup을 허용하는 **루프 안에서** 쓴다.
-- **runnable을 만드는 모든 경로는 반드시 `EnqueueRunnable` 하나를 거친다.** 나중에
-  local deque와 work stealing을 넣더라도 notifier를 우회하는 경로를 만들지 않는다.
+
+### 유지해야 할 invariant
+
+> **모든 runnable 생성은 Scheduler의 scheduling entry point를 거치며,
+> 어느 큐에 들어가든 필요한 wakeup notification이 함께 수행된다.**
+
+"모든 runnable을 global queue에 넣는다"는 뜻이 **아니다.** 2차에서 `EnqueueRunnable`은
+locality를 보고 **어느 큐에 넣을지 결정하는 단일 진입점**이 된다.
+
+```
+EnqueueRunnable(acb)
+    ├─ 현재 worker에서 locality를 활용할 수 있다  → CurrentWorker.LocalDeque.push
+    └─ 그렇지 않다                                → GlobalInjectionQueue.enqueue
+    ↓
+    필요하면 idle worker notify   ← 큐 종류와 무관하게 이 단계를 건너뛰지 않는다
+```
+
+위험한 것은 **큐에 직접 넣고 이 진입점을 우회하는 경로**다. 그 경로에서만 worker가
+깨지 않으므로 재현이 산발적이고 원인을 찾기 어렵다. 지금은 경로가 하나뿐이라 실수할
+여지가 없지만, local deque가 생기는 순간 경로가 늘어난다.
+
+큐별로 notify가 필요한 조건이 다르다는 점은 범위 절의 "2차에서 반드시 결정해야 할 것"
+참고.
 
 ---
 

@@ -41,17 +41,13 @@
 **오늘 바로 착수할 수 있는 것**만 여기 적는다. 먼저 골라야 할 게 있는 사안은
 [`design/OPEN_QUESTIONS.md`](design/OPEN_QUESTIONS.md)에 있다.
 
-### 높음
-
-- [ ] `ThreadManager` 정리. ADR-0009로 방향이 정해지면서 **재작성 범위가 거의 사라졌다** — 아무도 의존할 수 없는 편의 유틸리티이므로 지금의 launch/join 그대로면 충분하다. 남은 판단은 "이 정도면 라이브러리에 둘 가치가 있는가"뿐이고, 새 컴포넌트를 붙일 때 다시 보면 된다.
-
 ### 중간
 
 - [ ] **대표 워크로드에서 실측.** 계측은 갖춰졌으므로(ADR-0013) 이제 실제 컨텐츠를 붙이고 `SnapshotStats()`를 뽑으면 된다. ADR-0007·0008·0011의 재검토 조건이 전부 이 데이터를 기다린다. 메시지 단위 지표가 필요하면 `SetProfilingEnabled(true)`를 켠다.
 
 ### 낮음
 
-- [ ] Actor Runtime에 work stealing 도입. semantics가 검증됐으므로 이제 scheduler만 교체하면 된다. **`EnqueueRunnable`을 우회하는 경로를 만들지 않는 것**이 회귀 방지의 핵심이다 — 우회하면 그 경로에서만 worker가 깨지 않는다.
+- [ ] **2차 스케줄러** — worker-local work-stealing deque 도입, 현재 global queue를 injection queue 역할로 축소, stealing 추가, 기존 correctness test 전부 재통과. 목표 구조는 `design/actor-runtime.md`의 "목표 스케줄러 구조" 절에 있다. 착수하면 큐별 알림 정책을 Q-008로 열어야 한다 — local push마다 깨우면 local deque의 이득이 사라지고, 안 깨우면 한 worker에 일이 쌓이는 동안 나머지가 잔다.
 
 ---
 
@@ -66,7 +62,8 @@
 ## 알려진 이슈 · 메모
 
 - `ASSERT_CRASH`에 `NDEBUG` 가드가 없어 릴리즈에서도 프로세스가 죽는다. 의도된 동작이므로 계약 위반에만 쓰고, 복구 가능한 실패는 반환값으로 알릴 것.
-- 2026-09-15에 레거시(액터/메시지 시스템, 오브젝트 풀, MPSC 큐, 타이머 스케줄러, 전역 변수 일체)를 제거하고 Actor Runtime을 백지에서 다시 만들었다. 현재 구성은 **송신 버퍼 + Actor Runtime + 계측 + 얇은 스레드 런처**다. 제거 직전 구현은 git 히스토리(`2ce7019` 이전)에 있다.
+- 2026-09-15에 레거시(액터/메시지 시스템, 오브젝트 풀, MPSC 큐, 타이머 스케줄러, 전역 변수 일체)를 제거하고 Actor Runtime을 백지에서 다시 만들었다. 현재 구성은 **송신 버퍼 + Actor Runtime + 계측** 셋이다. 제거 직전 구현은 git 히스토리(`2ce7019` 이전)에 있다.
+- **스레드를 만들거나 관리하는 코드가 라이브러리에 없다.** `ThreadManager`는 사용처가 0이었고 `Join()`에 data race까지 있어 2026-09-15에 삭제했다. Actor Runtime은 자기 worker를 직접 만든다.
 - **전역 변수와 `thread_local` 전역이 하나도 없다.** `MyThreadID`·`LEndTickCount`·`LRanGen`·`GThreadManager`가 전부 선언만 되고 쓰이지 않던 죽은 코드여서 함께 정리했다. 재작성 과정에서 다시 들이지 말 것.
 - **PCH도 없다.** 모든 `.cpp`가 필요한 것을 직접 include한다. 다시 도입하면 `<windows.h>`와 `using namespace std;`가 전 TU에 끌려 들어온다.
 - `SnapshotStats()`는 살아 있는 스레드의 카운터를 잠금 없이 읽는다. 통계 목적의 의도된 benign race이며, 정확한 값이 필요하면 대상 스레드를 join한 뒤 읽어야 한다. 계측 단 구분은 ADR-0013.
