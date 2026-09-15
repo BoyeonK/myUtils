@@ -47,6 +47,11 @@
 - **Q-006** (WorkerContext 도입 여부) — 2026-09-15 해결.
   도입하지 않기로 했다. [ADR-0009](adr/0009-parts-not-framework.md) 참조 —
   앞으로의 모든 부품을 구속하는 규칙이 아니라는 점이 문서에 명시되어 있다.
+- **Q-008** (worker-local deque의 알림 정책), **Q-009** (worker loop의 큐 확인
+  순서와 injection 기아) — 2026-09-15 해결.
+  Q-008은 "유휴 worker가 있을 때만 notify", Q-009는 "61회마다 injection을 먼저 확인"으로
+  정했다. 두 큐의 notify 성격이 다르다는 것(injection은 correctness, local은 heuristic)이
+  판단의 핵심이다. [ADR-0014](adr/0014-work-stealing-scheduler.md) 참조.
 - **Q-004** (ObjectPool TLS 소멸 순서), **Q-005** (Actor 메시지 전달 경로 할당),
   **Q-007** (`Actor::_messageCount`의 의도) — 2026-09-15 무효.
   대상 코드(`Actor`, `ObjectPool`)를 재작성하기로 하고 저장소에서 제거했다.
@@ -57,7 +62,7 @@
 
 **현재 없다.** 파일이 비어 있는 게 아니라 전부 닫힌 상태다.
 
-새 질문을 열 때는 위 참여 규칙을 따르고, 번호는 **Q-008**부터 쓴다.
-`## Q-008 제목` 아래에 `Status` / `Opened` / `Blocked on` / `Affects`를 적고,
+새 질문을 열 때는 위 참여 규칙을 따르고, 번호는 **Q-010**부터 쓴다.
+`## Q-010 제목` 아래에 `Status` / `Opened` / `Blocked on` / `Affects`를 적고,
 **"무엇이 이 질문을 닫는가"를 반드시 포함할 것.** 그게 없으면 의견만 쌓이고
 결론이 나지 않는다.

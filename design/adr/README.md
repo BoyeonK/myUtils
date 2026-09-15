@@ -55,7 +55,7 @@ ADR을 명시한 새 질문을 열고, 결론이 나면 새 ADR을 쓴 뒤 기�
 
 ### Actor Runtime
 
-실행 규약은 [`design/actor-runtime.md`](../actor-runtime.md)에 있다. 아래 셋은
+실행 규약은 [`design/actor-runtime.md`](../actor-runtime.md)에 있다. 아래 넷은
 **왜 그 모델을 골랐는지**만 남긴다.
 
 | # | 제목 | Status |
@@ -63,3 +63,4 @@ ADR을 명시한 새 질문을 열고, 결론이 나면 새 ADR을 쓴 뒤 기�
 | [0010](0010-actor-ownership-and-lifetime.md) | Actor 소유권과 수명 모델 | Accepted |
 | [0011](0011-actor-scheduling-and-serialization.md) | Actor 실행 직렬화와 스케줄링 모델 | Accepted |
 | [0012](0012-actor-stop-failure-shutdown.md) | Actor 종료·실패·셧다운 semantics | Accepted |
+| [0014](0014-work-stealing-scheduler.md) | 2차 스케줄러 — work-stealing deque와 큐별 알림 정책 | Accepted |
