@@ -8,9 +8,12 @@
 
 ### 네트워크 / SendBuffer
 
-- [x] (2026-09-15 #2) chunk 수명을 refcount로 전환하면서 `SendBufferManager`가 Current Chunk 참조를 하나 보유하도록 했다. outstanding `SendView`만 세면 마지막 I/O 완료 순간 사용 중인 chunk가 pool로 반환되어 두 worker가 같은 chunk에 동시 bump allocation하는 use-after-free가 발생한다. 이 참조 덕분에 "refcount == 0"이 "아무도 이 chunk를 모른다"와 정확히 같은 뜻이 된다.
-- [x] (2026-09-15 #3) `SendBuffer` 계열을 레거시 코드와 양방향 분리. `ASSERT_CRASH`를 `MyUtils/Assert.h`로 추출해 PCH 암묵 의존(및 그에 딸려오던 `windows.h`, `using namespace std;`)을 끊었고, `ThreadManager::DestroyTLS()`의 `ReleaseCurrentChunk()` 호출도 제거했다. 후자는 `SendBufferManager`가 함수 지역 `thread_local`이라 소멸자가 알아서 반납하므로 불필요했다.
 - [x] (2026-09-15 #10) 미결 질문 세 건(Q-001·Q-002·Q-003)을 결정하고 ADR로 기록했다. 측정 없이 열어두기만 하는 것보다 근거를 명시한 baseline을 정하고 문제가 관측될 때 다시 여는 편이 낫다고 판단했다. `DEFAULT_CHUNK_CAPACITY`를 64 KB로 올리고 `LARGE_ALLOCATION_THRESHOLD`를 16 KB로 분리했으며(ADR-0008), 그 결과 chunk 획득이 1,197→289회, 교체 시 폐기 바이트가 1.44 MB→0.33 MB로 줄었다.
+
+### Actor Runtime
+
+- [x] (2026-09-15 #12) Actor Runtime 설계를 동결하고 문서로 고정했다. 요구사항·리뷰·동결 권고 세 문서에 흩어져 있던 결정 16개를 실행 규약(`design/actor-runtime.md`)과 ADR-0010~0012로 역할을 나눠 옮기고, 내용이 전부 흡수된 원본 세 문서는 삭제했다. 그 과정에서 `Stop()`의 이전 상태를 `load`+`store`로 잡으면 Finalize 주체 판정이 틀리는 경합과, 어느 문서에도 없던 "`Handle()`은 mailbox 락 밖에서 호출한다" invariant를 찾아 반영했다.
+- [x] (2026-09-15 #13) Actor Runtime 1차 구현과 correctness test 13종. 설계에서 정한 1차 범위(단일 global runnable queue, work stealing 제외)까지이며, 스펙의 invariant ↔ test 표를 그대로 테스트 이름으로 옮겨 문서가 코드와 어긋나면 테스트가 깨지게 했다. Debug/Release 각 5회 반복에서 전부 통과했다.
 
 ### 코어 / 스레드
 
@@ -37,7 +40,7 @@
 
 ### 높음
 
-- [ ] `ThreadManager` 재작성. 현재는 `std::thread`를 벡터에 모아 join하는 것이 전부다. **worker를 객체로 표현할지(Q-006)를 먼저 정해야 방향이 잡힌다.** 재작성 시 전역 변수를 다시 들이지 말 것 — 임의 스레드에서 쓸 수 있는 성질이 거기서 나온다.
+- [ ] `ThreadManager` 정리. ADR-0009로 방향이 정해지면서 **재작성 범위가 거의 사라졌다** — 아무도 의존할 수 없는 편의 유틸리티이므로 지금의 launch/join 그대로면 충분하다. 남은 판단은 "이 정도면 라이브러리에 둘 가치가 있는가"뿐이고, 새 컴포넌트를 붙일 때 다시 보면 된다.
 
 ### 중간
 
@@ -46,19 +49,16 @@
 
 ### 낮음
 
-- [ ] 액터/메시지 시스템 재구축. 2026-09-15에 기존 구현을 제거했으므로 백지에서 시작한다. 직전 구현은 git 히스토리(`2ce7019` 이전)에 있고, 거기서 가져갈 성질은 "액터 하나는 동시에 최대 한 스레드에서만 실행된다"는 계약과 weak_ptr 기반 태스크 정도다. 메시지 한 건당 힙 할당 0회를 목표로 잡을 것.
+- [ ] Actor Runtime에 work stealing 도입. semantics가 검증됐으므로 이제 scheduler만 교체하면 된다. **`EnqueueRunnable`을 우회하는 경로를 만들지 않는 것**이 회귀 방지의 핵심이다 — 우회하면 그 경로에서만 worker가 깨지 않는다.
+- [ ] Actor Runtime 계측. 현재 관측 수단이 `LiveActorCount()` 하나뿐이라 budget 32가 적절한지, mailbox mutex가 contention 지점인지 판단할 수 없다. ADR-0011의 재검토 조건이 전부 이 데이터를 기다린다.
 
 ---
 
 ## 결정 대기
 
-내용은 [`design/OPEN_QUESTIONS.md`](design/OPEN_QUESTIONS.md)에 있다. 여기에는 목록만 둔다.
+**현재 없다.** Q-001~Q-007이 전부 닫혔다. 새 질문이 열리면 [`design/OPEN_QUESTIONS.md`](design/OPEN_QUESTIONS.md)에 쓰고 여기에는 목록만 둔다.
 
-| # | 질문 | 막힌 이유 |
-|---|---|---|
-| Q-006 | `WorkerContext` 개념을 도입할 것인가 | 설계 판단 (지향의 문제) |
-
-닫힌 질문(전부 2026-09-15): **Q-001**(해결, baseline 튜닝 정책 — ADR-0008), **Q-002**(해결, `shared_ptr` 유지 — ADR-0003 후속 절), **Q-003**(해결, standalone 경로 미도입 — ADR-0007), **Q-004·Q-005·Q-007**(무효, 대상 코드 제거). 번호는 재사용하지 않는다.
+닫힌 질문(전부 2026-09-15): **Q-001**(해결, baseline 튜닝 정책 — ADR-0008), **Q-002**(해결, `shared_ptr` 유지 — ADR-0003 후속 절), **Q-003**(해결, standalone 경로 미도입 — ADR-0007), **Q-006**(해결, `WorkerContext` 미도입 — ADR-0009), **Q-004·Q-005·Q-007**(무효, 대상 코드 제거). 번호는 재사용하지 않으며 새 질문은 Q-008부터다.
 
 ---
 

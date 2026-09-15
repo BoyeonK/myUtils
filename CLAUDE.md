@@ -6,14 +6,31 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `MyUtils`는 게임 서버류 애플리케이션의 런타임 기반 요소를 제공하는 C++17 정적 라이브러리(CMake 타겟 `MyUtils::MyUtils`)다. 실행 파일은 없고, 다른 프로젝트에서 `add_subdirectory` / `FetchContent`로 가져와 `target_link_libraries(... MyUtils::MyUtils)`로 링크해 쓴다.
 
-현재 구성 요소는 두 가지뿐이다.
+현재 구성 요소는 셋이다.
 
 - **송신 버퍼** (`SendBuffer.h`) — thread-local bump allocator + refcounted chunk. 완성된 컴포넌트다.
-- **스레드 런처** (`Thread.h`) — `ThreadManager`의 launch/join이 전부. **전면 재작성 대상**이므로 이 위에 기능을 쌓지 말 것. 어떤 모양으로 갈지는 `design/OPEN_QUESTIONS.md`의 Q-006에서 정한다.
+- **Actor Runtime** (`Actor.h`) — MPSC mailbox + atomic 상태 머신 + worker pool. 실행 규약은 `design/actor-runtime.md`, 근거는 ADR-0010~0012.
+- **스레드 런처** (`Thread.h`) — `ThreadManager`의 launch/join이 전부. **현재 라이브러리의 어떤 것도 이걸 거쳤는지 묻지 않는다**(ADR-0009). 편의 유틸리티로 남아 있다.
 
 액터/메시지 시스템, 오브젝트 풀, MPSC 큐, 타이머 스케줄러, 그리고 전역 변수 일체를 **2026-09-15에 전부 제거했다.** 전면 재작성 대상이었고, 그 위에 무언가를 쌓는 것보다 비우고 다시 세우는 편이 낫다는 판단이었다. 필요하면 git 히스토리(`2ce7019` 이전)에서 참고할 수 있다.
 
-**전역 변수와 `thread_local` 전역은 이제 하나도 없다.** 송신 버퍼는 chunk refcount와 함수 지역 `thread_local`로 자기 상태를 관리하고, `ThreadManager`는 인스턴스를 직접 만들어 쓴다. 재작성 과정에서 전역을 다시 들이지 말 것 — 라이브러리를 임의 스레드에서 쓸 수 있게 만드는 성질이 여기서 나온다.
+## 현재 상태: 스레드 관리 주체에 묶이지 않는다
+
+**지금 있는 것들은 어느 스레드에서 불려도 동작한다.** `SendBuffer`는 `ThreadManager`를
+전혀 거치지 않고, 생 `std::thread`에서 정상 동작하는 것이 검증되어 있다. 전역 변수와
+`thread_local` 전역도 하나도 없다. 지향은 프레임워크보다 **부품 모음** 쪽이다(ADR-0009).
+
+그래서 새 코드를 쓸 때 이 방식을 **먼저 검토한다.**
+
+- 스레드별 상태가 필요하면 **함수 지역 `thread_local`로 스스로 초기화**한다. 등록·정리가 필요하면 그 객체의 생성자·소멸자가 처리한다(`SendBuffer`의 계측 블록이 이 패턴이다).
+- 외부에서 배정받는 스레드 식별자에 의존하지 않는다. 과거 `MyThreadID`가 그런 값이었고 `InitTLS()`를 거쳐야만 유효했다.
+- "쓰기 전에 초기화 훅을 불러야 한다"는 계약을 만들지 않는다.
+- 전역 변수를 되살리기 전에 한 번 더 생각한다. 전역은 곧 "누가 언제 초기화하는가"를 만든다.
+
+**단, 이게 절대 규칙은 아니다.** 스레드 관리 주체에 묶여야만 성립하는 컴포넌트가
+실제로 필요해지면 그때 판단하면 된다 — ADR-0009는 그런 상황을 미리 막아둔 문서가
+아니다. 다만 그건 **명시적으로 내려야 할 결정**이므로, 슬쩍 도입하지 말고
+`design/OPEN_QUESTIONS.md`에 질문을 열 것.
 
 ## 빌드
 
@@ -23,9 +40,9 @@ cmake --build build --config Debug     # 멀티 컨피그 생성기(Visual Studi
 ctest --test-dir build -C Debug --output-on-failure
 ```
 
-단일 테스트만 돌릴 때는 `ctest --test-dir build -C Debug -R SendBuffer`, 또는 실행 파일을
-직접 실행한다(`build/tests/Debug/SendBufferTest.exe`). 실행 파일이 통계 요약까지 출력하므로
-직접 실행하는 쪽이 정보가 많다.
+테스트는 `SendBuffer`와 `Actor` 둘이다. 하나만 돌리려면 `ctest ... -R Actor`, 또는 실행
+파일을 직접 실행한다(`build/tests/Debug/ActorTest.exe`). 실행 파일이 요약을 출력하므로
+직접 실행하는 쪽이 정보가 많다. Actor 쪽은 경합을 노린 반복이 많아 약 6초 걸린다.
 
 테스트는 이 레포를 **단독으로 빌드할 때만** 켜진다. 다른 프로젝트가 `add_subdirectory`로
 가져다 쓸 때는 꺼진다(`MYUTILS_BUILD_TESTS`).
@@ -39,10 +56,16 @@ lint 단계와 install 규칙은 없다.
 | 내용 | 위치 |
 |---|---|
 | 이 줄을 바꾸면 무엇이 깨지는가 | 코드 주석 |
+| **여러 파일에 걸친 시퀀스·상태표·락 규칙** | `design/<컴포넌트>.md` |
 | 지금 여기서 작업하려면 알아야 할 것 (현재 상태, 규칙, 함정) | **이 파일** |
 | 왜 이 모양으로 정했고 무엇을 검토했다 버렸는가 | `design/adr/` |
 | **아직 정하지 못한 것** | `design/OPEN_QUESTIONS.md` |
 | 완료 이력, 착수 가능한 TODO | `progress.md` |
+
+컴포넌트 스펙(`design/actor-runtime.md`)에는 **"현재 동작 서술"을 통째로 옮기지 않는다.**
+그게 가장 잘 낡는다. 한 파일 안에서 설명되는 규칙은 코드 주석에 두고, 파일을 넘나드는
+시퀀스만 스펙에 둔다. 스펙의 각 invariant는 자신을 검증하는 테스트 이름을 달아
+드리프트를 막는다.
 
 ADR은 **그 시점의 결정을 박제한 기록**이라 고치지 않는다. 결정이 바뀌면 새 ADR을 쓰고 기존 문서의 `Status`를 `Superseded by ADR-00XX`로 바꾼다. 설계 근거를 이 파일에 옮겨 적지 말 것 — 그러면 CLAUDE.md가 낡기 시작한다.
 
@@ -71,11 +94,26 @@ PUBLIC이다.
 
 ## 아키텍처
 
-### 스레드 런처 (`Thread.h` / `Thread.cpp`) — 전면 재작성 대상
+### Actor Runtime (`Actor.h` / `ActorRuntime.cpp`)
 
-`ThreadManager`는 현재 `std::thread`를 벡터에 모아 join하는 것이 전부다. TLS 초기화 훅(`InitTLS`/`DestroyTLS`)이 있었지만 초기화할 대상이 전부 죽은 전역이라 2026-09-15에 함께 제거했다.
+**실행 규약은 `design/actor-runtime.md`에 있다.** 상태 전이표, 두 가지 lost wakeup 프로토콜, 락 규칙, Finalize·Shutdown 시퀀스, invariant ↔ test 표가 거기 있다. 여기에는 손대기 전에 반드시 알아야 할 것만 적는다.
 
-**`SendBuffer`는 `ThreadManager`를 전혀 거치지 않는다.** chunk 수명은 refcount가, current chunk는 함수 지역 `thread_local SendBufferManager`가 관리하며 그 소멸자가 스레드 종료 시 알아서 반납한다. 그래서 생 `std::thread`에서도 정상 동작한다(검증 완료). 재작성할 때 이 독립성을 깨지 말 것.
+- **`Actor::Handle()`을 mailbox 락을 쥔 채 호출하지 말 것.** self-send / self-stop / handler 안에서의 `Spawn`이 전부 여기에 의존한다. **"배치 처리니까 락을 한 번만 잡자"는 최적화가 자연스럽게 들어올 자리다.** 어기면 `SelfSendFromHandler` / `SelfStopFromHandler` / `SpawnFromHandler` 테스트가 타임아웃한다.
+- **`Stop()`의 이전 상태는 CAS 루프로 포착할 것.** `load` 후 `store`로 쓰면 그 사이에 producer가 `IDLE → SCHEDULED`로 바꿔(이 전이는 mailbox 락 밖에서 일어난다) Finalize 주체 판정이 틀린다.
+- **runnable을 만드는 경로는 `EnqueueRunnable` 하나뿐이다.** 큐 삽입과 worker 깨우기가 거기서 묶인다. work stealing을 넣을 때 이걸 우회하면 그 경로에서만 worker가 깨지 않는다.
+- **`Send()`가 `true`여도 전달은 보장되지 않는다.** accept되었다는 뜻이며, 이후 `Stop`/`Shutdown`이 버릴 수 있다.
+- `Stop()`은 graceful stop이 아니다. pending 메시지를 버린다.
+- Registry를 순회하며 `Finalize`하지 말 것. `Finalize`가 스스로를 unregister하므로 스냅샷을 만든 뒤 락 밖에서 처리한다.
+
+work stealing은 아직 없다. 단일 global runnable queue만 쓴다.
+
+### 스레드 런처 (`Thread.h` / `Thread.cpp`)
+
+`ThreadManager`는 `std::thread`를 벡터에 모아 join하는 것이 전부다. TLS 초기화 훅(`InitTLS`/`DestroyTLS`)이 있었지만 초기화할 대상이 전부 죽은 전역이라 2026-09-15에 함께 제거했다.
+
+여기에 스레드별 초기화를 다시 넣으려 한다면, 그 순간 "그걸 거친 스레드여야 한다"는 전제가 생긴다는 점을 의식할 것. 그게 필요한 상황이면 그때 결정하면 되지만(ADR-0009), 무심코 들어가기 쉬운 자리다.
+
+`SendBuffer`가 `ThreadManager`를 전혀 거치지 않는 것이 현재의 예다 — chunk 수명은 refcount가, current chunk는 함수 지역 `thread_local SendBufferManager`가 관리하며 그 소멸자가 스레드 종료 시 알아서 반납한다. 생 `std::thread`에서도 정상 동작한다(검증 완료).
 
 ### 송신 버퍼 (`SendBuffer.h` / `SendBuffer.cpp`)
 

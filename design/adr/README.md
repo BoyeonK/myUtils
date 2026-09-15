@@ -33,6 +33,14 @@ ADR을 명시한 새 질문을 열고, 결론이 나면 새 ADR을 쓴 뒤 기�
 
 ## 목록
 
+### 라이브러리 전반
+
+| # | 제목 | Status |
+|---|---|---|
+| [0009](0009-parts-not-framework.md) | WorkerContext를 도입하지 않는다 | Accepted |
+
+### 송신 버퍼 (`SendBuffer`)
+
 | # | 제목 | Status |
 |---|---|---|
 | [0001](0001-refcounted-arena.md) | SendBuffer를 refcounted arena + bump allocation으로 | Accepted |
@@ -41,5 +49,16 @@ ADR을 명시한 새 질문을 열고, 결론이 나면 새 ADR을 쓴 뒤 기�
 | [0004](0004-single-global-chunkpool.md) | 단일 global ChunkPool과 그 수명 | Accepted |
 | [0005](0005-reserve-commit-tail-reclaim.md) | Reserve 단일 진입점과 tail reclaim 조건 | Accepted |
 | [0006](0006-size-validation-and-alignment.md) | 크기 검증 계층, 실패 정책, alignment 제외 | Accepted |
-| [0007](0007-no-standalone-path-for-pinning.md) | 브로드캐스트·coalescing pinning에 standalone 경로를 두지 않는다 | Accepted |
+| [0007](0007-no-standalone-path-for-pinning.md) | pinning에 standalone 경로를 두지 않는다 | Accepted |
 | [0008](0008-baseline-tuning-policy.md) | baseline 튜닝 정책과 allocator의 목적 정의 | Accepted |
+
+### Actor Runtime
+
+실행 규약은 [`design/actor-runtime.md`](../actor-runtime.md)에 있다. 아래 셋은
+**왜 그 모델을 골랐는지**만 남긴다.
+
+| # | 제목 | Status |
+|---|---|---|
+| [0010](0010-actor-ownership-and-lifetime.md) | Actor 소유권과 수명 모델 | Accepted |
+| [0011](0011-actor-scheduling-and-serialization.md) | Actor 실행 직렬화와 스케줄링 모델 | Accepted |
+| [0012](0012-actor-stop-failure-shutdown.md) | Actor 종료·실패·셧다운 semantics | Accepted |
