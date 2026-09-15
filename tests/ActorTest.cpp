@@ -9,13 +9,38 @@
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <set>
 #include <thread>
 #include <vector>
 
 using namespace MyUtils::Actors;
+
+// Spawn이 accepting fast path를 통과한 뒤 ACB를 할당하는 지점에서 멈추기 위한
+// test-only gate. 이 실행 순서를 강제해야 Shutdown과 Registry 등록의 선형화를
+// flaky한 stress loop 없이 결정적으로 검증할 수 있다.
+static thread_local bool GPauseNextAllocation = false;
+static std::atomic<bool> GAllocationPaused{ false };
+static std::atomic<bool> GReleaseAllocation{ false };
+
+void* operator new(std::size_t size) {
+    if (GPauseNextAllocation) {
+        GPauseNextAllocation = false;
+        GAllocationPaused.store(true);
+        while (!GReleaseAllocation.load())
+            std::this_thread::yield();
+    }
+
+    if (void* memory = std::malloc(size))
+        return memory;
+    throw std::bad_alloc();
+}
+
+void operator delete(void* memory) noexcept { std::free(memory); }
+void operator delete(void* memory, std::size_t) noexcept { std::free(memory); }
 
 static int GFailCount = 0;
 static int GCheckCount = 0;
@@ -521,6 +546,38 @@ static void TestSendAfterShutdownRejected() {
     stale.Stop();
 }
 
+static void TestSpawnConcurrentWithShutdownRejected() {
+    Section("SpawnConcurrentWithShutdownRejected");
+
+    ActorSystem system(1);
+    auto stats = std::make_shared<Stats>();
+    ActorRef spawned;
+
+    GAllocationPaused.store(false);
+    GReleaseAllocation.store(false);
+
+    std::thread spawner([&] {
+        // Actor 생성은 미리 끝낸다. 다음 할당은 Spawn이 accepting을 확인한 뒤
+        // 수행하는 ACB 할당이므로 그 정확한 경합 창에서 멈춘다.
+        auto actor = std::make_unique<CountingActor>(stats);
+        GPauseNextAllocation = true;
+        spawned = system.Spawn(std::move(actor));
+    });
+
+    const bool paused = WaitUntil([] { return GAllocationPaused.load(); });
+    CHECK(paused);
+    if (paused)
+        system.Shutdown();
+
+    GReleaseAllocation.store(true);
+    spawner.join();
+
+    // Shutdown의 등록 gate가 먼저 닫혔으므로 Spawn은 실패해야 하고,
+    // snapshot 이후 Registry에 Actor가 남아서는 안 된다.
+    CHECK(!spawned.IsValid());
+    CHECK(system.LiveActorCount() == 0);
+}
+
 static void TestShutdownWithPendingWork() {
     Section("ShutdownWithPendingWork");
 
@@ -879,6 +936,7 @@ int main() {
     TestSendAfterStopRejected();
     TestStopSendRace();
     TestSendAfterShutdownRejected();
+    TestSpawnConcurrentWithShutdownRejected();
     TestShutdownWithPendingWork();
     TestSelfSendFromHandler();
     TestSelfStopFromHandler();

@@ -60,9 +60,40 @@
 
 ## 열린 질문
 
-**현재 없다.** 파일이 비어 있는 게 아니라 전부 닫힌 상태다.
+## Q-010 worker-local LIFO가 Actor를 무기한 굶겨도 되는가
 
-새 질문을 열 때는 위 참여 규칙을 따르고, 번호는 **Q-010**부터 쓴다.
-`## Q-010 제목` 아래에 `Status` / `Opened` / `Blocked on` / `Affects`를 적고,
+- Status: Open
+- Opened: 2026-09-15
+- Blocked on: Actor 간 공정성 semantics 결정
+- Affects: ADR-0014, `design/actor-runtime.md`의 worker loop와 알려진 제약
+
+ADR-0014는 worker local deque의 owner가 뒤쪽에서 LIFO로 꺼내고 thief가 앞쪽에서
+FIFO로 훔치도록 정했다. 최근 생성된 작업의 locality를 높이고 여러 worker가 있을 때 오래된
+작업을 thief가 분산하는 구조다. 동시에 `ActorSystem(workerCount)`은 `workerCount == 1`도
+공식 지원한다.
+
+단일 worker에서는 다음 실행이 가능하다.
+
+1. handler가 Actor A와 Actor B를 차례로 깨워 local deque를 `[A, B]`로 만든다.
+2. owner는 뒤쪽의 B를 먼저 실행한다.
+3. B가 매 handler마다 자신에게 다음 메시지를 보내면, budget을 소진할 때마다 B가
+   local deque 뒤쪽에 다시 등록된다.
+4. deque가 계속 `[A, B]`가 되어 A는 앞쪽에 남지만 훔칠 worker가 없다.
+
+- (2026-09-15, Codex) 저장소 밖의 결정적 검증 프로그램에서 B가 10,001건을 처리하는
+  동안 A는 0건이었다. B의 연속 생성을 멈추자 A가 즉시 처리되었고, 같은 결과가 5회
+  반복됐다. 이는 처리량 저하가 아니라 실제 starvation 가능성이다.
+
+결정해야 할 것은 **Actor Runtime이 runnable Actor의 eventual execution을 보장하는가**다.
+
+- 보장하지 않는다면 local LIFO starvation을 알려진 제약으로 명시한다.
+- 보장한다면 ADR-0014를 명시적으로 재검토해 bounded fairness 조건과 이를 검증할
+  테스트를 정한다.
+
+**이 질문을 닫는 조건:** 저장소 소유자가 Actor 간 eventual execution 보장 여부를
+결정하고, 결론을 ADR 및 실행 규약에 반영한다.
+
+새 질문을 열 때는 위 참여 규칙을 따르고, 번호는 **Q-011**부터 쓴다.
+`## Q-011 제목` 아래에 `Status` / `Opened` / `Blocked on` / `Affects`를 적고,
 **"무엇이 이 질문을 닫는가"를 반드시 포함할 것.** 그게 없으면 의견만 쌓이고
 결론이 나지 않는다.

@@ -402,7 +402,7 @@ Finalize 이후 ACB는 살아 있을 수 있다 — `ActorRef`나 runnable 큐�
 ## 8. Shutdown sequence
 
 ```
-1. ActorSystem accepting = false        Spawn 거부
+1. ActorSystem accepting = false        Registry 락 안에서 설정, Spawn 등록과 선형화
 2. Scheduler stopping = true            sleep 락 안에서 설정 후 notify_all
 3. 모든 worker join                      실행 중인 Handler 완료 대기
 4. 남은 runnable 큐 discard
@@ -413,6 +413,11 @@ Finalize 이후 ACB는 살아 있을 수 있다 — `ActorRef`나 runnable 큐�
 
 **5번의 스냅샷이 필수다.** Finalize가 registry unregister를 하므로, registry를 순회하며
 Finalize하면 같은 뮤텍스 재획득(데드락) 또는 iterator 무효화가 난다.
+
+**1번과 `Spawn`의 Registry 등록은 같은 Registry 락을 쓴다.** `Spawn`의 사전
+`accepting` 확인은 불필요한 할당을 피하는 fast path일 뿐이고, 실제 등록 허용 여부는
+락 안에서 다시 확인한다. 따라서 락을 먼저 통과해 등록된 Actor는 5번 snapshot에 반드시
+포함되고, 1번 이후에 등록을 시도한 `Spawn`은 무효 `ActorRef`를 반환한다.
 
 ```
 { lock(registry); snapshot.assign(registry.begin(), registry.end()); }
@@ -487,6 +492,7 @@ public:
 | Stop boundary 이후 `Send`는 성공하지 않는다 | `SendAfterStopRejected` |
 | Stop과 Send가 경합해도 UAF가 없다 | `StopSendRace` |
 | Shutdown 후 stale `ActorRef`의 `Send`는 실패한다 | `SendAfterShutdownRejected` |
+| Shutdown gate 이후 Registry에 새 Actor가 등록되지 않는다 | `SpawnConcurrentWithShutdownRejected` |
 | 남은 메시지/runnable이 있어도 shutdown이 안전하다 | `ShutdownWithPendingWork` |
 | **`Handle` 중 mailbox 락을 보유하지 않는다** (L1) | `SelfSendFromHandler` |
 | | `SelfStopFromHandler` |

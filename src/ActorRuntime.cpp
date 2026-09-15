@@ -267,7 +267,9 @@ namespace MyUtils::Actors {
 		// 깨지 않는다. ADR-0011, ADR-0014
 		bool EnqueueRunnable(std::shared_ptr<ActorControlBlock> cb);
 
-		void Register(std::shared_ptr<ActorControlBlock> cb);
+		// accepting 확인과 Registry 등록을 같은 락 아래에서 선형화한다.
+		// true면 Shutdown의 snapshot에 반드시 포함되고, false면 등록되지 않는다.
+		bool TryRegister(std::shared_ptr<ActorControlBlock> cb);
 		void Unregister(const std::shared_ptr<ActorControlBlock>& cb);
 
 		bool IsAccepting() const noexcept { return _accepting.load(); }
@@ -691,9 +693,12 @@ namespace MyUtils::Actors {
 		}
 	}
 
-	void ActorRuntime::Register(std::shared_ptr<ActorControlBlock> cb) {
+	bool ActorRuntime::TryRegister(std::shared_ptr<ActorControlBlock> cb) {
 		std::lock_guard<std::mutex> guard(_registryLock);
+		if (!_accepting.load())
+			return false;
 		_registry.insert(std::move(cb));
+		return true;
 	}
 
 	void ActorRuntime::Unregister(const std::shared_ptr<ActorControlBlock>& cb) {
@@ -710,8 +715,13 @@ namespace MyUtils::Actors {
 		if (_shutdownStarted.exchange(true))
 			return;
 
-		// 1. 새 Spawn 거부
-		_accepting.store(false);
+		// 1. 새 Spawn 거부. accepting 변경과 Registry 등록은 같은 락으로
+		//    선형화한다. 이 락보다 먼저 등록된 Actor는 아래 snapshot에 반드시
+		//    포함되고, 나중에 진입한 Spawn은 TryRegister에서 거부된다.
+		{
+			std::lock_guard<std::mutex> guard(_registryLock);
+			_accepting.store(false);
+		}
 
 		// 2. stopping + notify. sleep 락 안에서 설정해야 wait 직전의 worker도 깨운다.
 		{
@@ -808,7 +818,11 @@ namespace MyUtils::Actors {
 		std::shared_ptr<ActorControlBlock> cb =
 			std::make_shared<ActorControlBlock>(std::move(actor), _runtime);
 
-		_runtime->Register(cb);
+		// 위 IsAccepting은 종료 후 불필요한 할당을 피하는 fast path일 뿐이다.
+		// Shutdown과의 실제 선형화 지점은 Registry 락 아래의 TryRegister다.
+		if (!_runtime->TryRegister(cb))
+			return ActorRef{};
+
 		Stats().spawnCount += 1;
 		return ActorRef{ std::move(cb) };
 	}

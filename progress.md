@@ -17,6 +17,7 @@
 - [x] (2026-09-15 #16) 스케줄러의 목표 구조(worker-local work-stealing deque + global injection queue)를 문서에 복원했다. 현재의 단일 global queue가 최종 architecture decision인 것처럼 문서화되어 있었는데, 실제로는 correctness를 먼저 검증하려고 단순화한 baseline scheduler다. 요구사항 원문을 삭제할 때 끊어진 링크만 확인하고 그 문서에만 있던 정보를 확인하지 않은 것이 원인이다.
 - [x] (2026-09-15 #17) drain 루프에 consumption boundary를 추가했다. `Stop()`은 state만 바꿀 뿐 worker는 여전히 루프 안이라, pop 전에 상태를 재확인하지 않으면 Stop 이후에도 pending 메시지를 budget 한도까지 처리해 "pending을 버린다"는 계약이 타이밍에 따라 0~31건 사이로 흔들렸다. 검사를 mailbox 락 안에 둬서 "Stop이 그 락을 통과한 뒤로는 어떤 메시지도 새로 pop되지 않는다"가 성립하게 했고, `SelfStopFromHandler`가 pending 미실행까지 검증하도록 강화했다(검사를 빼면 `handled == 4`로 깨지는 것을 확인).
 - [x] (2026-09-15 #18) 2차 스케줄러를 구현했다. 단일 global queue를 injection queue로 축소하고 worker-local deque(worker당 mutex + deque)와 work stealing을 붙였으며, 두 큐의 notify 성격이 다르다는 점(injection은 correctness, local은 heuristic)에 따라 알림 정책을 분리했다(Q-008·Q-009 → ADR-0014). 구현 중 문서에 없던 함정 둘을 찾아 테스트로 고정했다 — 다중 `ActorSystem`에서 TLS가 worker index만 담으면 runnable이 남의 deque로 새는 것(`CrossRuntimeIsolation`), local 우선만 두면 injection이 굶는 것(`InjectionNotStarvedByLocalWork`).
+- [x] (2026-09-15 #19) `Spawn()`과 `Shutdown()`의 Registry 등록 경합을 수정했다. `Spawn`이 accepting 확인을 통과한 뒤 ACB 할당에서 멈추고, 그 사이 `Shutdown`이 빈 Registry의 snapshot/clear를 끝내면 종료 후 Actor가 등록되어 `LiveActorCount()==1`이고 `Send()==true`가 되는 실행을 결정적으로 재현했다. accepting gate 변경과 Registry 등록을 같은 Registry 락으로 선형화해, 먼저 등록된 Actor는 shutdown snapshot에 반드시 포함되고 늦은 등록은 무효 `ActorRef`로 거부되게 했다. `SpawnConcurrentWithShutdownRejected`가 해당 경합 창을 고정한다.
 
 ### 코어 / 스레드
 
@@ -45,9 +46,11 @@
 
 ## 결정 대기
 
-**현재 없다.** Q-001~Q-007이 전부 닫혔다. 새 질문이 열리면 [`design/OPEN_QUESTIONS.md`](design/OPEN_QUESTIONS.md)에 쓰고 여기에는 목록만 둔다.
+- [ ] **Q-010 — worker-local LIFO의 Actor 간 공정성 semantics.** 단일 worker에서
+  계속 재등록되는 Actor가 앞쪽의 오래된 Actor를 무기한 굶길 수 있음이 확인됐다.
+  결정과 근거는 [`design/OPEN_QUESTIONS.md`](design/OPEN_QUESTIONS.md#q-010-worker-local-lifo가-actor를-무기한-굶겨도-되는가)에 둔다.
 
-닫힌 질문(전부 2026-09-15): **Q-001**(해결, baseline 튜닝 정책 — ADR-0008), **Q-002**(해결, `shared_ptr` 유지 — ADR-0003 후속 절), **Q-003**(해결, standalone 경로 미도입 — ADR-0007), **Q-006**(해결, `WorkerContext` 미도입 — ADR-0009), **Q-004·Q-005·Q-007**(무효, 대상 코드 제거). 번호는 재사용하지 않으며 새 질문은 Q-008부터다.
+닫힌 질문(전부 2026-09-15): **Q-001**(해결, baseline 튜닝 정책 — ADR-0008), **Q-002**(해결, `shared_ptr` 유지 — ADR-0003 후속 절), **Q-003**(해결, standalone 경로 미도입 — ADR-0007), **Q-006**(해결, `WorkerContext` 미도입 — ADR-0009), **Q-008·Q-009**(해결, 2차 스케줄러 정책 — ADR-0014), **Q-004·Q-005·Q-007**(무효, 대상 코드 제거). 번호는 재사용하지 않으며 Q-010은 현재 결정 대기 중이다.
 
 ---
 
