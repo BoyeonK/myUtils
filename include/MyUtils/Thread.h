@@ -13,8 +13,6 @@ namespace MyUtils {
 
 		static void InitTLS();
 		static void DestroyTLS();
-		static void GetRegisteredActorAndProcess();
-		static void DistributeOnTimeActorMessages();
 
 		void Launch(std::function<void()> callback);
 		void Join();
