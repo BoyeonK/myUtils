@@ -216,6 +216,100 @@ private:
     StatsPtr _stats;
 };
 
+// ---------------------------------------------------------------------------
+// 2차 스케줄러용 (ADR-0014)
+// ---------------------------------------------------------------------------
+
+// handler 안에서 여러 액터에게 뿌린다. worker 스레드에서 Send하므로 만들어지는
+// runnable이 전부 그 worker의 local deque로 들어간다.
+struct FanOutMessage : Message {
+    explicit FanOutMessage(std::vector<ActorRef> t) : targets(std::move(t)) {}
+
+    std::vector<ActorRef> targets;
+
+    // 둘 다 선택 사항이다. 지정하면 fan-out 직후 fannedOut을 세우고 release가
+    // 설 때까지 handler 안에서 대기한다 — local deque에 일이 쌓인 상태를
+    // 타이밍에 기대지 않고 만들기 위한 것이다.
+    std::atomic<bool>* fannedOut = nullptr;
+    std::atomic<bool>* release = nullptr;
+};
+
+class FanOutActor : public Actor {
+public:
+    void Handle(Message& message) override {
+        auto* m = dynamic_cast<FanOutMessage*>(&message);
+        if (m == nullptr)
+            return;
+
+        // worker 위에서 도는 Send라 전부 이 worker의 local deque로 들어간다
+        for (const ActorRef& target : m->targets)
+            target.Send(std::make_unique<IntMessage>(1));
+
+        if (m->fannedOut != nullptr)
+            m->fannedOut->store(true);
+
+        while (m->release != nullptr && !m->release->load())
+            std::this_thread::yield();
+    }
+};
+
+// 한 건 처리에 시간이 걸린다. owner 혼자 다 처리해버리기 전에 thief가 끼어들
+// 여지를 만든다.
+class SlowRecordingActor : public Actor {
+public:
+    explicit SlowRecordingActor(StatsPtr stats) : _stats(std::move(stats)) {}
+
+    void Handle(Message&) override {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        {
+            std::lock_guard<std::mutex> guard(_stats->threadIdLock);
+            _stats->threadIds.insert(std::this_thread::get_id());
+        }
+        _stats->handled.fetch_add(1);
+    }
+
+private:
+    StatsPtr _stats;
+};
+
+// 처리 시점에 "상대가 얼마나 진행했는지"를 sum에 기록한다.
+// injection이 굶었는지 판정하는 데 쓴다.
+class ObserverActor : public Actor {
+public:
+    ObserverActor(StatsPtr self, StatsPtr other)
+        : _self(std::move(self)), _other(std::move(other)) {
+    }
+
+    void Handle(Message&) override {
+        _self->sum.store(_other->handled.load());
+        _self->handled.fetch_add(1);
+    }
+
+private:
+    StatsPtr _self;
+    StatsPtr _other;
+};
+
+// 다른 ActorSystem의 액터에게 전달한다
+struct ForwardMessage : Message {
+    explicit ForwardMessage(ActorRef t) : target(std::move(t)) {}
+    ActorRef target;
+};
+
+class ForwardingActor : public Actor {
+public:
+    explicit ForwardingActor(StatsPtr stats) : _stats(std::move(stats)) {}
+
+    void Handle(Message& message) override {
+        _stats->handled.fetch_add(1);
+        if (auto* m = dynamic_cast<ForwardMessage*>(&message))
+            m->target.Send(std::make_unique<IntMessage>(7));
+    }
+
+private:
+    StatsPtr _stats;
+};
+
 }   // namespace
 
 // ---------------------------------------------------------------------------
@@ -537,6 +631,162 @@ static void TestHandlerExceptionStopsActor() {
     CHECK(!actor.Send(std::make_unique<IntMessage>(1)));
 }
 
+// ---------------------------------------------------------------------------
+// 2차 스케줄러 (ADR-0014)
+// ---------------------------------------------------------------------------
+
+static void TestWorkStealingBalancesLoad() {
+    Section("WorkStealingBalancesLoad");
+
+    constexpr int TARGETS = 48;
+
+    ActorSystem system(4);
+    auto stats = std::make_shared<Stats>();
+
+    std::vector<ActorRef> targets;
+    targets.reserve(TARGETS);
+    for (int i = 0; i < TARGETS; ++i)
+        targets.push_back(system.Spawn(std::make_unique<SlowRecordingActor>(stats)));
+
+    const ActorStats before = SnapshotStats();
+
+    // fan-out handler가 worker 위에서 돌면서 48건을 만든다. 전부 그 worker
+    // 하나의 local deque로 들어가므로, 나머지가 일하려면 훔쳐가야 한다.
+    ActorRef fanOut = system.Spawn(std::make_unique<FanOutActor>());
+    CHECK(fanOut.Send(std::make_unique<FanOutMessage>(targets)));
+
+    CHECK(WaitUntil([&] { return stats->handled.load() == TARGETS; }, 10000));
+
+    const ActorStats after = SnapshotStats();
+
+    // local deque로 라우팅되었는가
+    CHECK(after.localPushCount > before.localPushCount);
+
+    // 실제로 훔쳐갔는가 — 이게 핵심이다
+    CHECK(after.stealSuccessCount > before.stealSuccessCount);
+
+    // 한 worker가 다 처리하지 않았다
+    std::size_t threadCount = 0;
+    {
+        std::lock_guard<std::mutex> guard(stats->threadIdLock);
+        threadCount = stats->threadIds.size();
+    }
+    CHECK(threadCount >= 2);
+    std::printf("  처리 worker 수 : %zu, steal 성공 %llu회\n",
+        threadCount,
+        (unsigned long long)(after.stealSuccessCount - before.stealSuccessCount));
+}
+
+static void TestInjectionFromExternalThread() {
+    Section("InjectionFromExternalThread");
+
+    ActorSystem system(2);
+    auto stats = std::make_shared<Stats>();
+    ActorRef actor = system.Spawn(std::make_unique<CountingActor>(stats));
+
+    const ActorStats before = SnapshotStats();
+
+    // worker가 아닌 스레드다. TLS의 runtime이 nullptr이라 injection으로 가야 한다.
+    std::thread producer([&] {
+        for (int i = 0; i < 100; ++i)
+            actor.Send(std::make_unique<IntMessage>(1));
+    });
+    producer.join();
+
+    CHECK(WaitUntil([&] { return stats->handled.load() == 100; }));
+
+    const ActorStats after = SnapshotStats();
+    CHECK(after.injectionPushCount > before.injectionPushCount);
+}
+
+static void TestInjectionNotStarvedByLocalWork() {
+    Section("InjectionNotStarvedByLocalWork");
+
+    constexpr int PILE = 300;
+
+    // worker 1개가 핵심이다. 그 하나의 local deque에 일이 쌓여 있는 동안
+    // injection을 주기적으로 보지 않으면 영영 확인하지 않는다.
+    //
+    // 타이밍에 기대지 않는다. fan-out handler가 local deque를 채운 뒤 그대로
+    // 붙잡고 있으므로, 그 사이에 injection을 채우고 나서 놓아준다.
+    ActorSystem system(1);
+
+    auto pileStats = std::make_shared<Stats>();
+    auto observerStats = std::make_shared<Stats>();
+
+    std::vector<ActorRef> pile;
+    pile.reserve(PILE);
+    for (int i = 0; i < PILE; ++i)
+        pile.push_back(system.Spawn(std::make_unique<CountingActor>(pileStats)));
+
+    ActorRef observer =
+        system.Spawn(std::make_unique<ObserverActor>(observerStats, pileStats));
+
+    std::atomic<bool> fannedOut{ false };
+    std::atomic<bool> release{ false };
+
+    auto fanOutMessage = std::make_unique<FanOutMessage>(pile);
+    fanOutMessage->fannedOut = &fannedOut;
+    fanOutMessage->release = &release;
+
+    ActorRef fanOut = system.Spawn(std::make_unique<FanOutActor>());
+    CHECK(fanOut.Send(std::move(fanOutMessage)));
+
+    // local deque에 PILE건이 쌓였고 worker는 아직 handler 안에 붙잡혀 있다
+    CHECK(WaitUntil([&] { return fannedOut.load(); }));
+
+    // 이제 injection에 넣는다. main은 worker가 아니므로 반드시 injection이다.
+    CHECK(observer.Send(std::make_unique<IntMessage>(1)));
+    release.store(true);
+
+    CHECK(WaitUntil([&] { return observerStats->handled.load() == 1; }, 10000));
+
+    // observer가 처리된 시점에 local pile이 얼마나 소진돼 있었나.
+    // pile의 각 액터는 한 번 실행에 1건만 처리하므로 tick 1회 = 1건이고,
+    // 주기가 61이므로 최대 61건 안에 잡혀야 한다.
+    // 주기 확인이 없으면 PILE을 전부 비운 뒤에야(= PILE) 처리된다.
+    const int pileProgress = observerStats->sum.load();
+    CHECK(pileProgress < PILE / 2);
+    std::printf("  local %d건 중 %d건 시점에 injection 처리됨 (주기 %zu)\n",
+        PILE, pileProgress, INJECTION_POLL_INTERVAL);
+
+    CHECK(WaitUntil([&] { return pileStats->handled.load() == PILE; }, 10000));
+}
+
+static void TestCrossRuntimeIsolation() {
+    Section("CrossRuntimeIsolation");
+
+    // 시스템 A의 worker가 시스템 B의 액터에게 Send한다.
+    // TLS가 index만 담고 있으면 B의 runnable이 A의 local deque로 샌다.
+    ActorSystem systemA(2);
+    ActorSystem systemB(2);
+
+    auto statsA = std::make_shared<Stats>();
+    auto statsB = std::make_shared<Stats>();
+
+    ActorRef actorB = systemB.Spawn(std::make_unique<CountingActor>(statsB));
+    ActorRef actorA = systemA.Spawn(std::make_unique<ForwardingActor>(statsA));
+
+    const ActorStats before = SnapshotStats();
+
+    CHECK(actorA.Send(std::make_unique<ForwardMessage>(actorB)));
+
+    CHECK(WaitUntil([&] { return statsB->handled.load() == 1; }));
+    CHECK(statsB->sum.load() == 7);
+
+    const ActorStats after = SnapshotStats();
+
+    // 이 구간의 push는 둘 다 injection이어야 한다.
+    //   main -> A의 액터        : main은 worker가 아니다
+    //   A의 worker -> B의 액터  : A의 worker는 B의 worker가 아니다
+    // runtime 비교가 빠지면 두 번째가 local push로 잡힌다.
+    CHECK(after.localPushCount == before.localPushCount);
+    CHECK(after.injectionPushCount >= before.injectionPushCount + 2);
+
+    systemA.Shutdown();
+    systemB.Shutdown();
+}
+
 static void TestProfilingFlagGatesMailboxProbe() {
     Section("ProfilingFlagGatesMailboxProbe");
 
@@ -593,6 +843,26 @@ static void PrintStats() {
         (unsigned long long)s.spawnCount, (unsigned long long)s.finalizeCount,
         (unsigned long long)s.handlerExceptionCount);
     std::printf("  worker sleep   : %llu회\n", (unsigned long long)s.workerSleepCount);
+
+    // --- 2차 스케줄러 (ADR-0014) ---
+    const unsigned long long pushTotal = s.localPushCount + s.injectionPushCount;
+    if (pushTotal > 0) {
+        std::printf("  runnable 라우팅: local %llu / injection %llu (local %.1f%%)\n",
+            (unsigned long long)s.localPushCount,
+            (unsigned long long)s.injectionPushCount,
+            100.0 * double(s.localPushCount) / double(pushTotal));
+    }
+    if (s.localPushCount > 0) {
+        std::printf("  notify 생략    : %llu회 (local push의 %.1f%%)\n",
+            (unsigned long long)s.notifySkippedCount,
+            100.0 * double(s.notifySkippedCount) / double(s.localPushCount));
+    }
+    if (s.stealAttemptCount > 0) {
+        std::printf("  work stealing  : %llu/%llu 성공 (%.1f%%)\n",
+            (unsigned long long)s.stealSuccessCount,
+            (unsigned long long)s.stealAttemptCount,
+            100.0 * double(s.stealSuccessCount) / double(s.stealAttemptCount));
+    }
     if (s.mailboxLockCount > 0) {
         std::printf("  mailbox 대기   : 평균 %.2f us (%llu회 측정, 3단)\n",
             double(s.mailboxWaitUsTotal) / double(s.mailboxLockCount),
@@ -614,6 +884,10 @@ int main() {
     TestSelfStopFromHandler();
     TestSpawnFromHandler();
     TestHandlerExceptionStopsActor();
+    TestWorkStealingBalancesLoad();
+    TestInjectionFromExternalThread();
+    TestInjectionNotStarvedByLocalWork();
+    TestCrossRuntimeIsolation();
     TestProfilingFlagGatesMailboxProbe();
 
     PrintStats();
