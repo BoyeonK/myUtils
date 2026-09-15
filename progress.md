@@ -14,20 +14,17 @@
 
 - [x] (2026-09-15 #12) Actor Runtime 설계를 동결하고 문서로 고정했다. 요구사항·리뷰·동결 권고 세 문서에 흩어져 있던 결정 16개를 실행 규약(`design/actor-runtime.md`)과 ADR-0010~0012로 역할을 나눠 옮기고, 내용이 전부 흡수된 원본 세 문서는 삭제했다. 그 과정에서 `Stop()`의 이전 상태를 `load`+`store`로 잡으면 Finalize 주체 판정이 틀리는 경합과, 어느 문서에도 없던 "`Handle()`은 mailbox 락 밖에서 호출한다" invariant를 찾아 반영했다.
 - [x] (2026-09-15 #13) Actor Runtime 1차 구현과 correctness test 13종. 설계에서 정한 1차 범위(단일 global runnable queue, work stealing 제외)까지이며, 스펙의 invariant ↔ test 표를 그대로 테스트 이름으로 옮겨 문서가 코드와 어긋나면 테스트가 깨지게 했다. Debug/Release 각 5회 반복에서 전부 통과했다.
+- [x] (2026-09-15 #16) 스케줄러의 목표 구조(worker-local work-stealing deque + global injection queue)를 문서에 복원했다. 현재의 단일 global queue가 최종 architecture decision인 것처럼 문서화되어 있었는데, 실제로는 correctness를 먼저 검증하려고 단순화한 baseline scheduler다. 요구사항 원문을 삭제할 때 끊어진 링크만 확인하고 그 문서에만 있던 정보를 확인하지 않은 것이 원인이다.
 
 ### 코어 / 스레드
 
 - [x] (2026-09-15 #9) 액터/메시지 시스템, 오브젝트 풀, MPSC 큐, 타이머 스케줄러를 저장소에서 제거했다. 전부 전면 재작성 대상이라, 그 위에 무언가를 쌓는 것보다 비우고 다시 세우는 편이 낫다고 판단했다. 연쇄로 `ThreadManager`의 액터 구동 메서드 2개도 정리했다.
 - [x] (2026-09-15 #11) 남아 있던 죽은 코드를 전부 걷어냈다. 전역 4개(`GThreadManager`, `MyThreadID`, `LEndTickCount`, `LRanGen`)가 선언만 되고 쓰이는 곳이 없어 `GlobalVariables` 파일 쌍과 함께 지웠고, 초기화 대상이 사라지면서 빈 껍데기가 된 `InitTLS`/`DestroyTLS`도 제거했다. 그 결과 `pch.h`를 실제로 쓰는 `.cpp`가 하나도 남지 않아 PCH까지 지웠다 — 아무도 안 쓰면서 `<windows.h>`와 `using namespace std;`를 전 TU에 끌고 들어오고 있었다.
+- [x] (2026-09-15 #15) 쓰이지 않는데다 깨져 있던 `ThreadManager`를 제거했다. 라이브러리·테스트 어디에서도 쓰지 않았고 하는 일이 `vector<thread>` + join 루프여서 편의성 이득이 5줄이었다. 게다가 `Launch`는 뮤텍스를 잡는데 `Join`은 잡지 않아 동시 호출 시 iterator 무효화와 data race가 났다 — 뮤텍스가 있어서 동기화된 것처럼 보이는 게 더 나빴다.
 
 ### 계측
 
 - [x] (2026-09-15 #14) 계측을 비용 3단으로 나눠 구현했다. ADR 다섯 개가 "이 조건이 관측되면 재검토한다"고 달아뒀는데 정작 그 조건을 감지할 수단이 없어서, 트리거는 있고 알람은 없는 상태였다. chunk·배치 단위 지표는 메시지당 환산하면 0.2ns 미만이라 항상 켜두고, 메시지마다 시계를 읽어야 하는 mailbox 대기 시간만 런타임 플래그로 뺐다(ADR-0013).
-
-### 빌드 · 테스트 인프라
-
-- [x] (2026-09-15 #5) `tests/` 타겟과 ctest 연결. `SendBufferTest`가 tail reclaim 3경로, chunk 교체 중 이전 chunk 생존, pool 반환 타이밍, 크로스 스레드 해제, `SendView` 복사 fanout, 그리고 패턴 검증으로 영역 겹침을 잡는 멀티스레드 스트레스까지 164개 항목을 검사한다. 단독 빌드일 때만 켜지므로(`MYUTILS_BUILD_TESTS`) 소비자 프로젝트에는 영향이 없다.
-- [x] (2026-09-15 #6) `.gitignore`에 `build/`, `out/`, `images/portfolio/` 추가.
 
 ### 문서
 
@@ -68,4 +65,5 @@
 - **PCH도 없다.** 모든 `.cpp`가 필요한 것을 직접 include한다. 다시 도입하면 `<windows.h>`와 `using namespace std;`가 전 TU에 끌려 들어온다.
 - `SnapshotStats()`는 살아 있는 스레드의 카운터를 잠금 없이 읽는다. 통계 목적의 의도된 benign race이며, 정확한 값이 필요하면 대상 스레드를 join한 뒤 읽어야 한다. 계측 단 구분은 ADR-0013.
 - 소스와 헤더는 BOM 없는 UTF-8이다. MSVC에서 `/utf-8`을 빼면 조용히 깨진다.
+- **문서를 지울 때는 끊어진 링크뿐 아니라 "그 문서가 유일한 출처인 정보"가 있는지 먼저 확인할 것.** 요구사항 원문을 지우면서 스케줄러 목표 구조를 통째로 잃은 전례가 있다(2026-09-15, `8d13fd1`에서 복원).
 - 문서는 다섯 곳으로 나뉜다 — 코드 주석 / `design/<컴포넌트>.md` / `CLAUDE.md` / `design/adr/` / 이 파일. 어디에 무엇을 쓰는지는 `CLAUDE.md`의 "문서 구조" 절에 있다. 같은 내용을 두 곳에 쓰지 말 것.
