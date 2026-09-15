@@ -21,7 +21,15 @@ ADR은 **그 시점의 결정을 박제한 기록**이지 현재 상태를 설�
 
 여기 있는 것은 **이미 결정된 사안**이다. 뒤집으려면 `OPEN_QUESTIONS.md`에 해당
 ADR을 명시한 새 질문을 열고, 결론이 나면 새 ADR을 쓴 뒤 기존 문서의 `Status`를
-`Superseded by ADR-00XX`로 바꾼다. 기존 문서 본문은 고치지 않는다.
+`Superseded by ADR-00XX`로 바꾼다.
+
+### 기존 문서를 어디까지 건드릴 수 있나
+
+- **Context / Decision / 기각된 대안은 고치지 않는다.** 그때의 판단을 그대로 둔다.
+- **`Status`와 날짜 찍힌 "후속" 절은 추가할 수 있다.** 그게 ADR이 낡지 않는 방식이다.
+  결정이 바뀐 게 아니라 **유보했던 것이 닫혔을 때**는 새 ADR을 만들지 말고 원래
+  문서에 후속을 붙인다. 같은 결정이 두 곳에 생기는 것을 막기 위해서다.
+  (예: ADR-0003의 "언제 intrusive로 바꿀 것인가")
 
 ## 목록
 
@@ -33,3 +41,5 @@ ADR을 명시한 새 질문을 열고, 결론이 나면 새 ADR을 쓴 뒤 기�
 | [0004](0004-single-global-chunkpool.md) | 단일 global ChunkPool과 그 수명 | Accepted |
 | [0005](0005-reserve-commit-tail-reclaim.md) | Reserve 단일 진입점과 tail reclaim 조건 | Accepted |
 | [0006](0006-size-validation-and-alignment.md) | 크기 검증 계층, 실패 정책, alignment 제외 | Accepted |
+| [0007](0007-no-standalone-path-for-pinning.md) | 브로드캐스트·coalescing pinning에 standalone 경로를 두지 않는다 | Accepted |
+| [0008](0008-baseline-tuning-policy.md) | baseline 튜닝 정책과 allocator의 목적 정의 | Accepted |

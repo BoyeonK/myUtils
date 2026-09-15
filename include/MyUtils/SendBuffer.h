@@ -23,16 +23,17 @@ namespace MyUtils::Network {
 	// -----------------------------------------------------------------------
 	// 정책 상수
 	//
-	//   전부 튜닝 값이며 correctness와 무관하다.
-	//   SnapshotStats()의 이용률/chunk 수/large 비율을 보고 조정한다.
+	//   전부 튜닝 값이며 correctness와 무관하다. 현재 값은 최적값이 아니라
+	//   합의된 baseline policy다. 근거와 재검토 조건은 ADR-0008 참고.
 	// -----------------------------------------------------------------------
 
-	inline constexpr std::size_t DEFAULT_CHUNK_CAPACITY = 16 * 1024;
+	// 작은 할당을 많이 amortize하기 위한 저장 공간 크기.
+	inline constexpr std::size_t DEFAULT_CHUNK_CAPACITY = 64 * 1024;
 
-	// 이 값을 넘는 요청은 current chunk를 교체하지 않고 전용 chunk로 보낸다.
-	// CAPACITY보다 작게 둘 수 있다. 큰 요청 하나가 current chunk에 남은 공간을
-	// 통째로 버리게 하고 싶지 않으면 낮춘다.
-	inline constexpr std::size_t LARGE_ALLOCATION_THRESHOLD = DEFAULT_CHUNK_CAPACITY;
+	// 하나의 요청이 current chunk를 교체하게 만들 만큼 큰지를 판정하는 정책값.
+	// CAPACITY와 의미가 다르므로 같이 두지 않는다 — 이 값을 넘는 요청은 current
+	// chunk를 교체하지 않고 전용 chunk로 보내, 남은 공간을 버리지 않게 한다.
+	inline constexpr std::size_t LARGE_ALLOCATION_THRESHOLD = 16 * 1024;
 
 	static_assert(LARGE_ALLOCATION_THRESHOLD <= DEFAULT_CHUNK_CAPACITY,
 		"threshold가 capacity보다 크면 그 사이 크기를 담을 chunk가 없다");
