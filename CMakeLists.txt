@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.16) # precompiled headers 지원
+cmake_minimum_required(VERSION 3.16)
 project(MyUtils)
 
 include(FetchContent)
@@ -14,12 +14,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 add_library(MyUtils STATIC
     src/SendBuffer.cpp
-    src/GlobalVariables.cpp
     src/Thread.cpp
 
     include/MyUtils/SendBuffer.h
     include/MyUtils/Assert.h
-    include/MyUtils/GlobalVariables.h
     include/MyUtils/Thread.h
 )
 
@@ -30,8 +28,6 @@ add_library(MyUtils STATIC
 if(MSVC)
     target_compile_options(MyUtils PUBLIC /utf-8)
 endif()
-
-target_precompile_headers(MyUtils PRIVATE src/pch.h)
 
 target_link_libraries(MyUtils PUBLIC concurrentqueue)
 
