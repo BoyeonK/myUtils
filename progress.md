@@ -16,6 +16,7 @@
 - [x] (2026-09-15 #13) Actor Runtime 1차 구현과 correctness test 13종. 설계에서 정한 1차 범위(단일 global runnable queue, work stealing 제외)까지이며, 스펙의 invariant ↔ test 표를 그대로 테스트 이름으로 옮겨 문서가 코드와 어긋나면 테스트가 깨지게 했다. Debug/Release 각 5회 반복에서 전부 통과했다.
 - [x] (2026-09-15 #16) 스케줄러의 목표 구조(worker-local work-stealing deque + global injection queue)를 문서에 복원했다. 현재의 단일 global queue가 최종 architecture decision인 것처럼 문서화되어 있었는데, 실제로는 correctness를 먼저 검증하려고 단순화한 baseline scheduler다. 요구사항 원문을 삭제할 때 끊어진 링크만 확인하고 그 문서에만 있던 정보를 확인하지 않은 것이 원인이다.
 - [x] (2026-09-15 #17) drain 루프에 consumption boundary를 추가했다. `Stop()`은 state만 바꿀 뿐 worker는 여전히 루프 안이라, pop 전에 상태를 재확인하지 않으면 Stop 이후에도 pending 메시지를 budget 한도까지 처리해 "pending을 버린다"는 계약이 타이밍에 따라 0~31건 사이로 흔들렸다. 검사를 mailbox 락 안에 둬서 "Stop이 그 락을 통과한 뒤로는 어떤 메시지도 새로 pop되지 않는다"가 성립하게 했고, `SelfStopFromHandler`가 pending 미실행까지 검증하도록 강화했다(검사를 빼면 `handled == 4`로 깨지는 것을 확인).
+- [x] (2026-09-15 #18) 2차 스케줄러를 구현했다. 단일 global queue를 injection queue로 축소하고 worker-local deque(worker당 mutex + deque)와 work stealing을 붙였으며, 두 큐의 notify 성격이 다르다는 점(injection은 correctness, local은 heuristic)에 따라 알림 정책을 분리했다(Q-008·Q-009 → ADR-0014). 구현 중 문서에 없던 함정 둘을 찾아 테스트로 고정했다 — 다중 `ActorSystem`에서 TLS가 worker index만 담으면 runnable이 남의 deque로 새는 것(`CrossRuntimeIsolation`), local 우선만 두면 injection이 굶는 것(`InjectionNotStarvedByLocalWork`).
 
 ### 코어 / 스레드
 
@@ -27,10 +28,6 @@
 
 - [x] (2026-09-15 #14) 계측을 비용 3단으로 나눠 구현했다. ADR 다섯 개가 "이 조건이 관측되면 재검토한다"고 달아뒀는데 정작 그 조건을 감지할 수단이 없어서, 트리거는 있고 알람은 없는 상태였다. chunk·배치 단위 지표는 메시지당 환산하면 0.2ns 미만이라 항상 켜두고, 메시지마다 시계를 읽어야 하는 mailbox 대기 시간만 런타임 플래그로 뺐다(ADR-0013).
 
-### 문서
-
-- [x] (2026-09-15 #8) `design/OPEN_QUESTIONS.md` 신설. 여러 세션과 다른 AI 에이전트가 같은 문서를 보고 이어서 논의하는 것이 목적이라, 각 항목에 "무엇이 이 질문을 닫는가"를 못박고 서명·날짜, ADR 재논쟁 금지, 측정 대기 항목에 의견 쌓지 않기를 참여 규칙으로 명시했다. `progress.md` TODO에서 결정 대기 5건을 빼고 링크만 남겨 중복을 없앴다.
-
 ---
 
 ## TODO
@@ -40,11 +37,9 @@
 
 ### 중간
 
-- [ ] **대표 워크로드에서 실측.** 계측은 갖춰졌으므로(ADR-0013) 이제 실제 컨텐츠를 붙이고 `SnapshotStats()`를 뽑으면 된다. ADR-0007·0008·0011의 재검토 조건이 전부 이 데이터를 기다린다. 메시지 단위 지표가 필요하면 `SetProfilingEnabled(true)`를 켠다.
+- [ ] **대표 워크로드에서 실측.** 계측은 갖춰졌으므로(ADR-0013) 이제 실제 컨텐츠를 붙이고 `SnapshotStats()`를 뽑으면 된다. ADR-0007·0008·0011·0014의 재검토 조건이 전부 이 데이터를 기다린다. 메시지 단위 지표가 필요하면 `SetProfilingEnabled(true)`를 켠다.
 
-### 낮음
-
-- [ ] **2차 스케줄러** — worker-local work-stealing deque 도입, 현재 global queue를 injection queue 역할로 축소, stealing 추가, 기존 correctness test 전부 재통과. 목표 구조는 `design/actor-runtime.md`의 "목표 스케줄러 구조" 절에 있다. 착수하면 큐별 알림 정책을 Q-008로 열어야 한다 — local push마다 깨우면 local deque의 이득이 사라지고, 안 깨우면 한 worker에 일이 쌓이는 동안 나머지가 잔다.
+  스케줄러 쪽에서 특히 볼 것 — `stealSuccess/stealAttempt`(현재 테스트에서 0.4%. 잠들기 전 헛스캔이 비용으로 잡히면 victim 선택을 손볼 자리다), injection과 local의 큐 대기 시간 차이(`INJECTION_POLL_INTERVAL`=61 재검토), `notifySkipped/localPush`(조건부 notify가 실제로 아끼는 게 있는가).
 
 ---
 
@@ -66,5 +61,7 @@
 - `SnapshotStats()`는 살아 있는 스레드의 카운터를 잠금 없이 읽는다. 통계 목적의 의도된 benign race이며, 정확한 값이 필요하면 대상 스레드를 join한 뒤 읽어야 한다. 계측 단 구분은 ADR-0013.
 - 소스와 헤더는 BOM 없는 UTF-8이다. MSVC에서 `/utf-8`을 빼면 조용히 깨진다.
 - **문서를 지울 때는 끊어진 링크뿐 아니라 "그 문서가 유일한 출처인 정보"가 있는지 먼저 확인할 것.** 요구사항 원문을 지우면서 스케줄러 목표 구조를 통째로 잃은 전례가 있다(2026-09-15, `8d13fd1`에서 복원).
+- **미커밋 변경이 있는 파일에 `git checkout <파일>`을 쓰지 말 것.** HEAD로 되돌아가 그 파일의 미커밋 작업이 전부 사라진다. 2026-09-15에 2차 스케줄러 구현을 이렇게 날렸다(재적용으로 복구). 코드를 임시로 바꿔 실험할 때는 먼저 사본을 떠두고 그것으로 되돌린다.
+- **PowerShell `Set-Content`/`Out-File`로 소스 파일을 쓰지 말 것.** 한글 주석이 깨진다(2026-09-15에 `ActorRuntime.cpp`가 이걸로 깨졌다). 파일을 통째로 바꿔야 하면 Python 바이너리 모드나 `Copy-Item`처럼 바이트를 보존하는 수단을 쓴다.
 - **ADR의 논증이 일부 경로에만 적용되어 있지 않은지 확인할 것.** ADR-0012는 "Stop은 state만 바꿀 뿐 worker는 여전히 drain 루프 안이다"라는 논증을 예외 경로에만 적고 일반 `Stop` 경로에는 적용하지 않았고, 구현도 그대로 빠뜨렸다. 같은 문서 안에 답이 있었던 전례다(2026-09-15).
 - 문서는 다섯 곳으로 나뉜다 — 코드 주석 / `design/<컴포넌트>.md` / `CLAUDE.md` / `design/adr/` / 이 파일. 어디에 무엇을 쓰는지는 `CLAUDE.md`의 "문서 구조" 절에 있다. 같은 내용을 두 곳에 쓰지 말 것.
