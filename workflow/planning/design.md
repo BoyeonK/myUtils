@@ -32,14 +32,14 @@ Design은 현재 프로젝트에서 확인한 실제 구조와 제약을 활용�
 
 필요하면 다음을 직접 참조할 수 있다.
 
-* 실제 클래스와 함수
-* 기존 API
-* 관련 component
-* repository 구조
-* 기존 설계 및 아키텍처 문서
-* 기존 의사결정 기록
-* 관련 테스트
-* coding/naming convention
+- 실제 클래스와 함수
+- 기존 API
+- 관련 component
+- repository 구조
+- 기존 설계 및 아키텍처 문서
+- 기존 의사결정 기록
+- 관련 테스트
+- coding/naming convention
 
 현재 프로젝트에 특화된 Design이 만들어지는 것은 정상이다.
 
@@ -52,22 +52,22 @@ Design은 현재 프로젝트에서 확인한 실제 구조와 제약을 활용�
 
 작업 성격에 따라 필요한 항목을 검토한다.
 
-* API
-* 책임 분리
-* ownership
-* lifetime
-* state transition
-* concurrency
-* synchronization
-* error handling
-* failure semantics
-* resource management
-* performance 특성
-* 확장 가능성
-* 기존 시스템과의 integration
-* observability
-* testability
-* 구현 복잡도
+- API
+- 책임 분리
+- ownership
+- lifetime
+- state transition
+- concurrency
+- synchronization
+- error handling
+- failure semantics
+- resource management
+- performance 특성
+- 확장 가능성
+- 기존 시스템과의 integration
+- observability
+- testability
+- 구현 복잡도
 
 관련 없는 항목은 억지로 포함하지 않는다.
 
@@ -79,23 +79,23 @@ Design은 구현 전에 확정할 가치가 있는 핵심 기술 결정에 집�
 
 특히 다음과 같은 결정은 Planning에서 다룬다.
 
-* 이후 변경 비용이 큰 결정
-* 여러 component 또는 파일의 계약에 영향을 주는 결정
-* 외부 API와 동작 의미
-* ownership과 핵심 lifetime
-* correctness를 좌우하는 concurrency invariant
-* 중요한 failure semantics
-* 검증 전략에 영향을 주는 결정
+- 이후 변경 비용이 큰 결정
+- 여러 component 또는 파일의 계약에 영향을 주는 결정
+- 외부 API와 동작 의미
+- ownership과 핵심 lifetime
+- correctness를 좌우하는 concurrency invariant
+- 중요한 failure semantics
+- 검증 전략에 영향을 주는 결정
 
 반면 구현 과정에서 안전하게 결정할 수 있는 지역적인 세부사항은 Development로 남긴다.
 
-예를 들어 다음과 같은 내용은 핵심 설계 선택에 영향을 주지 않는다면 Planning에서 미리 확정하지 않는다.
+다음과 같은 내용은 핵심 설계 선택에 영향을 주지 않는다면 Planning에서 미리 확정하지 않는다.
 
-* 자명한 private helper 구조
-* 기계적인 파일별 수정 목록
-* 모든 테스트 케이스의 상세 절차
-* 지역 변수나 내부 표현의 세부 형태
-* 설계 선택에 영향을 주지 않는 구현 의사코드
+- 자명한 private helper 구조
+- 기계적인 파일별 수정 목록
+- 모든 테스트 케이스의 상세 절차
+- 지역 변수나 내부 표현의 세부 형태
+- 설계 선택에 영향을 주지 않는 구현 의사코드
 
 ---
 
@@ -125,10 +125,10 @@ AI가 대안을 분석하고 합리적인 기본안을 제시할 수 있다면 �
 
 다만 다음과 같은 경우에는 사용자의 판단을 요청할 수 있다.
 
-* 선택에 따라 제품 또는 기능의 의미가 달라지는 경우
-* 서로 다른 trade-off 중 사용자의 우선순위가 필요한 경우
-* Specification만으로 의도를 판단할 수 없는 경우
-* 기존 프로젝트의 중요한 설계 방향을 변경하는 경우
+- 선택에 따라 제품 또는 기능의 의미가 달라지는 경우
+- 서로 다른 trade-off 중 사용자의 우선순위가 필요한 경우
+- Specification만으로 의도를 판단할 수 없는 경우
+- 기존 프로젝트의 중요한 설계 방향을 변경하는 경우
 
 ---
 
@@ -136,13 +136,13 @@ AI가 대안을 분석하고 합리적인 기본안을 제시할 수 있다면 �
 
 다음을 만족하면 Design Review로 이동한다.
 
-* Specification의 주요 요구사항을 모두 다룬다.
-* 기존 프로젝트와의 관계가 설명되어 있다.
-* 핵심 API와 동작 의미가 설명되어 있다.
-* 주요 ownership과 lifetime이 설명되어 있다.
-* 주요 failure path가 설명되어 있다.
-* 중요한 trade-off가 드러나 있다.
-* 구현 전에 확정해야 할 핵심 설계 결정이 정리되어 있다.
-* 남은 결정은 Development에서 처리 가능한 지역적 구현 세부사항이다.
+- Specification의 주요 요구사항을 모두 다룬다.
+- 기존 프로젝트와의 관계가 설명되어 있다.
+- 핵심 API와 동작 의미가 설명되어 있다.
+- 관련된 주요 ownership과 lifetime이 설명되어 있다.
+- 관련된 주요 failure path가 설명되어 있다.
+- 중요한 trade-off가 드러나 있다.
+- 구현 전에 확정해야 할 핵심 설계 결정이 정리되어 있다.
+- 남은 결정은 Development에서 처리 가능한 지역적 구현 세부사항이다.
 
 이 시점의 `design.md`는 검토 전 설계안이다.

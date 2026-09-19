@@ -22,12 +22,12 @@ Specification은 AI가 필요한 기능을 대신 결정하는 단계가 아니�
 
 AI는 다음 역할을 수행한다.
 
-* 사용자의 요구를 구조화한다.
-* 모호한 부분을 발견한다.
-* 빠진 요구사항이나 결정점을 발견한다.
-* 기존 Project Context에서 이미 정해진 제약을 찾아낸다.
-* 필요한 경우 선택지를 설명한다.
-* 사용자의 결정을 명문화한다.
+- 사용자의 요구를 구조화한다.
+- 모호한 부분을 발견한다.
+- 빠진 요구사항이나 결정점을 발견한다.
+- 기존 Project Context에서 이미 정해진 제약을 찾아낸다.
+- 필요한 경우 선택지를 설명한다.
+- 사용자의 결정을 명문화한다.
 
 최종적으로 무엇이 필요한지는 사용자가 결정한다.
 
@@ -99,10 +99,10 @@ Specification을 작성하면서 사용자의 판단이 필요한 사항이 발�
 
 질문하기 전에 가능한 범위에서 다음을 확인한다.
 
-* 기존 Project Context에서 이미 답을 찾을 수 있는가
-* 실제 Requirement인지 Design 단계에서 결정할 문제인지
-* AI가 불필요하게 선택지를 제한하고 있지는 않은가
-* 사용자가 판단할 수 있도록 선택지와 의미를 충분히 정리할 수 있는가
+- 기존 Project Context에서 이미 답을 찾을 수 있는가
+- 실제 Requirement인지 Design 단계에서 결정할 문제인지
+- AI가 불필요하게 선택지를 제한하고 있지는 않은가
+- 사용자가 판단할 수 있도록 선택지와 의미를 충분히 정리할 수 있는가
 
 질문은 가능한 한 단순한 찬반 확인보다 **결정해야 할 의미와 선택지**를 보여준다.
 
@@ -120,13 +120,13 @@ Acceptance Criteria는 구현 완료 여부를 실제로 판단할 수 있어야
 
 다음 조건을 만족하면 Specification Confirmation으로 이동한다.
 
-* 문제와 목표가 명확하다.
-* 주요 사용 사례가 정의되어 있다.
-* 요구사항과 비요구사항의 경계가 보인다.
-* 주요 제약이 확인되어 있다.
-* Requirement와 Design decision이 가능한 범위에서 분리되어 있다.
-* 완료 여부를 검증할 Acceptance Criteria가 있다.
-* 아직 확정되지 않은 사항이 Open Question으로 드러나 있다.
+- 문제와 목표가 명확하다.
+- 주요 사용 사례가 정의되어 있다.
+- 요구사항과 비요구사항의 경계가 보인다.
+- 주요 제약이 확인되어 있다.
+- Requirement와 Design decision이 가능한 범위에서 분리되어 있다.
+- 완료 여부를 검증할 Acceptance Criteria가 있다.
+- 아직 확정되지 않은 사항이 Open Question으로 드러나 있다.
 
 이 시점의 `spec.md`는 사용자 확인 전 초안이다.
 
@@ -180,12 +180,12 @@ Acceptance Criteria
 
 사용자는 필요에 따라 다음과 같은 내용을 수정할 수 있다.
 
-* Requirement 추가 또는 제거
-* 범위 수정
-* Constraint 수정
-* Non-goal 수정
-* Acceptance Criteria 수정
-* Open Question에 대한 결정
+- Requirement 추가 또는 제거
+- 범위 수정
+- Constraint 수정
+- Non-goal 수정
+- Acceptance Criteria 수정
+- Open Question에 대한 결정
 
 Main AI는 사용자 피드백을 `spec.md`에 반영한다.
 
@@ -198,11 +198,34 @@ Discovery 또는 Specification으로 돌아갈 수 있다.
 
 다음과 같은 의미의 사용자 응답을 Specification 확인으로 간주할 수 있다.
 
-* 이 요구사항이 맞다.
-* 이 범위로 진행하자.
-* Specification 확정.
-* Design으로 진행.
-* 이에 준하는 명확한 표현
+- 이 요구사항이 맞다.
+- 이 범위로 진행하자.
+- Specification 확정.
+- Design으로 진행.
+- 이에 준하는 명확한 표현
+
+확인 표현은 현재 Workflow 단계의 의미로 해석한다.
+
+Specification Confirmation 단계의 확인을
+최종 Design 승인이나 Development 진입 승인으로 확대 해석하지 않는다.
+
+---
+
+## 재확인
+
+이미 확인된 Specification이 이후 단계에서 변경된 경우
+변경 내용이 사용자 의도나 작업 범위에 영향을 주는지 확인한다.
+
+다음 항목의 **내용이 변경된 경우에는 기본적으로 재확인 대상으로 취급한다.**
+
+- Requirements
+- Non-goals
+- Acceptance Criteria
+
+표현이나 서술만 바뀌고 위 항목의 의미가 그대로인 경우에는 별도의 재확인을 요구하지 않는다.
+
+재확인이 필요한 경우 전체 Specification을 다시 제시하기보다
+변경된 부분과 그 영향만 중심으로 사용자에게 확인받는다.
 
 ---
 
@@ -210,8 +233,10 @@ Discovery 또는 Specification으로 돌아갈 수 있다.
 
 다음을 만족하면 Design으로 이동한다.
 
-* 사용자가 핵심 요구사항과 범위를 확인했다.
-* Design을 막는 Requirement 수준의 Open Question이 없다.
-* `spec.md`가 현재 작업의 요구사항 baseline으로 사용할 수 있다.
+- 사용자가 핵심 요구사항과 범위를 확인했다.
+- Design을 막는 Requirement 수준의 Open Question이 없다.
+- `spec.md`가 현재 작업의 요구사항 baseline으로 사용할 수 있다.
 
 Specification Confirmation 이후의 `spec.md`가 Design의 기준이 된다.
+
+확인 상태와 중요한 사용자 결정은 필요한 범위에서 `status.md`에 반영한다.
