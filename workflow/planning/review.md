@@ -42,6 +42,10 @@ Reviewer는 다음과 같은 형태일 수 있다.
 
 사용 가능한 Reviewer가 둘 이상이라면 Main AI는 사용 가능한 선택지를 사용자에게 제시하고 선택을 요청한다.
 
+Reviewer 선택 외에도 사용자 판단이 필요한 Open Question이 있다면 가능한 한 하나의 질문으로 함께 제시한다.
+
+현재 Workflow에서 이미 Reviewer가 선택되었고 그 선택이 여전히 유효하다면 동일한 결정을 반복해서 요청하지 않는다.
+
 사용자가 특정 Reviewer를 지정했다면 가능한 경우 해당 Reviewer를 사용한다.
 
 선택한 Reviewer를 사용할 수 없는 경우 임의로 다른 Reviewer로 대체하지 않고 사용자에게 알린다.
@@ -105,17 +109,20 @@ Main AI가 별도의 AI 실행 컨텍스트를 직접 생성할 수 있다면
 
 ## Reviewer 입력
 
-Reviewer에게 최소한 다음을 제공한다.
+Reviewer는 우선 다음 자료를 중심으로 검토를 시작한다.
 
 * 확정된 `spec.md`
 * 현재 `design.md`
-* 설계를 평가하는 데 필요한 Project Context
+* 검토에 필요한 최소한의 Project Context
 
-필요하면 실제 repository의 코드와 문서를 읽도록 할 수 있다.
+추가 source code, test, 설계 문서 또는 decision record는
+특정 판단을 검증하기 위해 필요한 경우에만 조회한다.
+
+관련 가능성이 있다는 이유만으로 repository 전체나 관련 문서 전체를 선제적으로 탐색하지 않는다.
 
 불필요하게 Designer의 설계 정당화 과정이나 이전 대화 전체를 제공하지 않는다.
 
-Reviewer가 결과물과 실제 Project Context를 중심으로 판단하도록 한다.
+Reviewer가 결과물과 필요한 Project Context를 중심으로 판단하도록 한다.
 
 ---
 
@@ -267,8 +274,16 @@ Main AI의 기본안은 사용자 결정과 구분한다.
 
 ## 반복 Review
 
-Blocking issue를 해결하는 과정에서 Design의 핵심 구조가 크게 변경되었다면
-Design Review를 다시 수행할 수 있다.
+재검토는 기본적으로 다음만 대상으로 한다.
+
+* 이전 Review 이후 변경된 Design
+* 기존 Blocking 또는 Important finding
+* 각 finding에 대한 반영 내용
+* 변경으로 인해 새로 발생한 위험
+
+Reviewer는 재검토에 필요한 범위만 다시 확인한다.
+
+Design의 핵심 구조나 전제가 크게 변경된 경우에만 전체 Review를 다시 수행한다.
 
 사소한 수정까지 매번 Review를 반복할 필요는 없다.
 
@@ -279,10 +294,11 @@ Design Review를 다시 수행할 수 있다.
 다음을 만족하면 Approval로 이동한다.
 
 * Blocking issue가 해결되었다.
-* Important issue가 검토되었다.
+* Important issue가 검토되고 처리 방향이 결정되었다.
 * Specification과 Design이 서로 일치한다.
 * Project Context와 알려진 충돌이 없다.
-* Design이 구현 기준으로 사용할 수 있는 수준으로 구체적이다.
+* 구현 전에 확정해야 할 핵심 설계 결정이 정리되어 있다.
+* 남은 결정은 Development에서 처리 가능한 구현 세부사항이다.
 * 남아 있는 trade-off와 Open Question이 명확하다.
 
 ---
