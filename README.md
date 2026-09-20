@@ -155,7 +155,7 @@ ctest --test-dir build -C Debug --output-on-failure
 - [`CLAUDE.md`](CLAUDE.md): 모든 코딩 에이전트가 공유하는 현재 프로젝트 문맥과 작업 규칙
 - [`design/`](design/): 여러 파일에 걸친 실행 규약과 컴포넌트 설계
 - [`design/DOC_RULES.md`](design/DOC_RULES.md): 무엇을 어느 문서에 쓰는가
-- [`progress.md`](progress.md): 완료 이력과 바로 착수할 수 있는 후속 작업, 알려진 이슈
+- [`progress.md`](progress.md): 완료 이력, 하기로 정해진 후속 작업, 알려진 이슈
 
 **"왜 그렇게 정했는가"는 저장하지 않는다.** 기록하는 것은 현재 동작과 "무엇을 건드리면
 깨지는가"뿐이며, 전자는 코드 주석과 `design/`에, 후자는 그 옆에 함께 둔다.

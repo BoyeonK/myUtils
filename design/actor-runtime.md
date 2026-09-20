@@ -27,9 +27,7 @@
 | Global Injection Queue | **MPMC** | producer 여럿 → worker 여럿이 꺼감 |
 | Worker Local Runnable | **work-stealing deque** | owner는 `push_bottom`/`pop_bottom`, thief는 `steal_top` |
 
-local deque는 worker당 `std::mutex` + `std::deque`다. 근거와 Chase-Lev를 쓰지 않은
-이유는 경합 제거의 본체가 락을 1개에서 N개로 쪼개는 것이고, 스케줄러
-연산이 이미 배치(32건)당 1회라 뮤텍스 비용이 묻히기 때문이다.
+local deque는 worker당 `std::mutex` + `std::deque`다(`ActorRuntime.cpp`의 해당 주석 참조).
 
 **어디에 넣는지의 기준은 locality다.**
 
