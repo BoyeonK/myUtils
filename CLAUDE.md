@@ -9,9 +9,12 @@
 | 컴포넌트 | 코드 | 문서 |
 | --- | --- | --- |
 | 송신 버퍼 | `include/MyUtils/SendBuffer.h`, `src/SendBuffer.cpp` | [`design/send-buffer.md`](design/send-buffer.md) |
-| Actor Runtime | `include/MyUtils/Actor.h`, `src/ActorRuntime.cpp` | [`design/actor-runtime.md`](design/actor-runtime.md) |
+| Actor Runtime | `include/MyUtils/Runtime.h`, `include/MyUtils/Actor.h`, `src/Runtime.cpp`, `src/Actors.cpp`, `src/RuntimeInternal.h` | [`design/actor-runtime.md`](design/actor-runtime.md) |
 
-상태 전이표, 락 규칙, 수명·소유권 관계, 정책 상수의 의미는 전부 위 문서에 있다. 계측 지표 목록은 각 공개 헤더에 있다.
+Actor Runtime은 **worker thread pool과 그 위에서 도는 실행 주체를 한 몸체로** 묶은 것이다.
+프로세스에 하나이고 1회 기동·1회 종료한다. 추후 I/O나 임의 함수자가 붙을 자리도 여기다.
+
+상태 전이표, 락 규칙, 수명·소유권 관계, 정책 상수의 의미는 전부 위 문서에 있다. 계측 지표 목록은 공개 헤더에 있다 — 송신 버퍼는 `SendBuffer.h`, Actor Runtime은 `Runtime.h`.
 
 ## 작업 절차
 
@@ -34,7 +37,9 @@ cmake --build build --config Debug     # 멀티 컨피그 생성기에서는 --c
 ctest --test-dir build -C Debug --output-on-failure
 ```
 
-테스트 실행 파일은 종료 시 계측 요약을 출력하므로 직접 실행하는 쪽이 정보가 많다(`build/tests/Debug/ActorTest.exe`). Actor 쪽은 경합을 노린 반복이 많아 약 6초 걸린다. 테스트는 이 레포를 단독으로 빌드할 때만 켜진다(`MYUTILS_BUILD_TESTS`). lint 단계와 install 규칙은 없다.
+테스트 실행 파일은 종료 시 계측 요약을 출력하므로 직접 실행하는 쪽이 정보가 많다(`build/tests/Debug/ActorTest.exe`). Actor 쪽은 경합을 노린 반복이 많아 몇 초 걸린다. 테스트는 이 레포를 단독으로 빌드할 때만 켜진다(`MYUTILS_BUILD_TESTS`). lint 단계와 install 규칙은 없다.
+
+**Actor 테스트가 실행 파일 넷으로 나뉘어 있는 것은 제약이다.** 런타임이 프로세스 전역 단일이고 1회 기동·1회 종료라, 한 프로세스는 worker 수 하나와 종료 한 번만 가질 수 있다. 어느 invariant가 어디로 갔는지는 [`design/actor-runtime.md`](design/actor-runtime.md) §10에 있다. 새 Actor 테스트를 추가할 때는 **필요한 런타임 형상**부터 정한다.
 
 ## 금지 사항과 함정
 

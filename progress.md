@@ -6,10 +6,6 @@
 
 ## 완료
 
-### 빌드 / 이식성
-
-- [x] (2026-09-20 #3) 소비자가 `add_subdirectory`로 가져다 쓸 때 공개 헤더가 컴파일되지 않던 것을 고쳤다. 표준 지정이 `set(CMAKE_CXX_STANDARD 17)`뿐이었는데 이건 디렉터리 스코프 변수라 소비자 타깃에 전파되지 않고, 공개 헤더는 중첩 네임스페이스·`std::byte`·`inline constexpr`을 쓴다. 그래서 소비자는 MSVC 기본 표준(C++14)으로 헤더를 컴파일하다 C2429로 실패했다 — 문서가 안내하는 사용법인데 실제로 해본 적이 없어 드러나지 않았다. `target_compile_features(MyUtils PUBLIC cxx_std_17)`로 요구사항을 타깃에 실었다.
-
 ### 문서 체계
 
 - [x] (2026-09-20 #4) 부트스트랩 문서에서 컴포넌트 세부를 걷어내고 `design/` 아래 주제별 문서로 분리했다(`send-buffer.md`·`threading.md`·`instrumentation.md`·`DOC_RULES.md` 신규). 모든 세션이 항상 읽는 자리라 크기 자체가 비용인데, Actor 쪽 서술은 `actor-runtime.md`와 완전히 중복이었고 SendBuffer 쪽은 헤더 주석과 겹쳐 있었다. `CLAUDE.md`가 218줄에서 57줄이 됐고, 끊어진 참조(`AGENTS.md`·`README.md`·이 파일의 "문서 구조" 절 링크)도 함께 고쳤다.
@@ -21,6 +17,10 @@
 - [x] (2026-09-21 #1) `progress.md` TODO의 기준을 "오늘 바로 착수할 수 있는가"에서 "하기로 정해졌는가"로 바꿨다. 앞의 기준은 `OPEN_QUESTIONS.md`와의 경계선이었는데 그 문서를 파기하면서 착수하지 못하는 결정된 작업이 갈 곳을 잃었고, 실제로 CI 항목이 이미 머리말을 어기고 있었다. 시작했지만 끝내지 못한 작업은 어디까지 됐고 무엇이 남았는지를 함께 남기도록 했다.
 - [x] (2026-09-21 #2) 부트스트랩과 하위 문서의 불일치를 검토해 넷을 고쳤다 — `AGENTS.md`가 가리키던 절 이름, 계측 지표 목록의 소재, `send-buffer.md`의 공통 규약 중복, `progress.md` 메모에 섞여 있던 현재 동작 서술. 특히 `CLAUDE.md`와 `instrumentation.md`가 지표 목록의 소재로 `actor-runtime.md`를 가리켰지만 그 문서에는 계측 서술이 한 줄도 없어 각 공개 헤더로 정정했다. 상대 링크와 invariant ↔ test 표의 이름 34개는 전부 실제 코드와 일치하는 것을 확인했다.
 - [x] (2026-09-21 #3) `design/*.md`를 코드와 대조해 `actor-runtime.md`의 세 지점을 고쳤다. §8 Shutdown이 존재하지 않는 7번째 단계를 적고 있었고 5번 의사코드가 `Stop()` 호출을 빠뜨려 스펙대로 구현하면 종료 중 `Send`가 accept되는 창이 열렸으며, §9 공개 API 목록에는 `WorkerCount()`·`LiveActorCount()`가 빠져 있었다. §2의 "원자 연산은 전부 seq_cst"는 계측 카운터와 `_enqueuedAtUs`가 `relaxed`인 것과 어긋나 상태 전이로 범위를 한정했다.
+
+### 런타임 구조
+
+- [x] (2026-09-21 #4) **worker thread pool을 도입하고 런타임을 프로세스 전역 단일 몸체로 바꿨다.** `ActorSystem(workerCount)`을 없애고 스케줄러를 `WorkerPool`과 `ActorRegistry`로 갈라 `RuntimeBody`가 묶으며, 큐가 `shared_ptr<Task>`를 담아 나중에 I/O나 임의 함수자를 얹을 때 pool 내부를 다시 설계하지 않게 했다(그 실행 경로 자체는 이번 범위가 아니다). 수명이 1회 기동·1회 종료가 되면서 한 프로세스가 worker 수 하나와 종료 한 번만 가질 수 있어 Actor 테스트가 실행 파일 넷으로 나뉘었다(배정표는 `design/actor-runtime.md` §10). 복수 런타임을 전제하던 `CrossRuntimeIsolation` invariant와 ACB의 `weak_ptr<ActorRuntime>`은 폐기했고, 후자가 지던 stale 핸들 안전성은 §1의 `LT1`·`LT2`가 진다.
 
 ---
 
@@ -35,30 +35,33 @@
 
 ### 중간
 
-- [ ] **스레드 풀 도입.** 기존 `ActorRuntime`의 worker와 어떤 관계를 갖는지는 정하지 않았다.
-
 - [ ] **대표 워크로드에서 실측.** 실제 컨텐츠를 붙이고 `SnapshotStats()`를 뽑는다. 정책 상수(chunk 64 KB / large 16 KB / pool 유휴 64 / `INJECTION_POLL_INTERVAL` 61 / `DEFAULT_MESSAGE_BUDGET` 32)가 전부 baseline이라, 이 데이터가 있어야 조정할 근거가 생긴다.
 
-  볼 것 — `committedBytes/reservedBytes`(이용률), `chunkCreateCount/chunkAcquireCount`(pool miss), `largeAllocCount`, `LiveChunkBytes()`, 그리고 배치당 평균 메시지 수와 큐 대기 시간.
+  **기본 worker 수도 측정 대상에 들어간다.** 2026-09-21 #4로 `hardware_concurrency`(이 머신 20)가 기본값이 됐는데, 게임 서버 워크로드에서 그게 적정한지는 확인된 적이 없다.
+
+  볼 것 — `committedBytes/reservedBytes`(이용률), `chunkCreateCount/chunkAcquireCount`(pool miss), `largeAllocCount`, `LiveChunkBytes()`, 그리고 배치당 평균 메시지 수·큐 대기 시간·`workerSleepCount`.
 
 - [ ] **CI 빌드.** 범위는 배포 타깃에 달렸다 — Windows 전용이면 MSVC 1종으로 충분하고, 리눅스 서버에 올릴 생각이 있으면 gcc·clang을 더해 3종으로 간다(소스가 표준 C++17 + `concurrentqueue`뿐이라 이식 가능해 **보이지만** MSVC 외로 빌드해 본 적이 없고, 이 머신에 대체 컴파일러가 없어 CI가 유일한 검증 수단이다).
 
-  어느 쪽이든 **소비자 프로브 스텝을 포함한다** — 별도 프로젝트에서 `add_subdirectory`로 가져다 쓰고 공개 헤더를 컴파일해 보는 것. #3이 딱 이 경로를 실행해 본 적이 없어서 생긴 결함이었다.
+  어느 쪽이든 **소비자 프로브 스텝을 포함한다** — 별도 프로젝트에서 `add_subdirectory`로 가져다 쓰고 공개 헤더를 컴파일해 보는 것. 2026-09-20에 공개 헤더가 소비자 쪽에서 컴파일조차 안 되던 결함이 딱 이 경로를 실행해 본 적이 없어서 생겼다. 2026-09-21 #4에서 수동으로 한 번 돌려 통과했지만 자동화된 적은 없다.
 
 ---
 
 ## 알려진 이슈 · 메모
 
 - 2026-09-15에 레거시(액터/메시지 시스템, 오브젝트 풀, MPSC 큐, 타이머 스케줄러, 전역 변수 일체)를 제거하고 Actor Runtime을 백지에서 다시 만들었다. 현재 구성은 **송신 버퍼 + Actor Runtime** 둘이다. 제거 직전 구현은 git 히스토리(`2ce7019` 이전)에 있다.
-- **`ThreadManager`를 되살리지 말 것.** 사용처가 0이었고 `Join()`에 data race까지 있어 2026-09-15에 삭제했다. 현재 스레딩 구조는 [`design/threading.md`](design/threading.md)에 있다.
+- **`ThreadManager`를 되살리지 말 것 — 하지만 "중앙 주체 금지"로 읽지 말 것.** 그것이 2026-09-15에 삭제된 이유는 중앙 주체여서가 아니라 **사용처가 0이었고 `Join()`에 data race가 있었기 때문**이다. 2026-09-21에 스레드를 소유하는 중앙 주체(런타임 몸체)를 명시적으로 도입했고, 그때 피한 것이 정확히 저 둘이다 — 등록 API가 없고(스레드를 거기 등록하는 주체가 없다), join이 단일 소유자 안에서만 멱등하게 일어난다. 현재 스레딩 구조는 [`design/threading.md`](design/threading.md)에 있다.
+- **런타임 몸체의 생성자에서 계측 전역을 먼저 건드리는 세 줄을 지우지 말 것.** 정적 파괴 순서가 뒤집혀 종료 시점에 worker가 죽은 전역을 만진다. **어겨도 테스트가 잡아주지 않는다** — 프로세스 종료 때만, 비결정적으로 깨진다. 근거는 `Runtime.cpp`의 해당 주석과 `design/actor-runtime.md` §0에 있다.
+- **런타임이 프로세스 전역 단일이라 `LiveActorCount()`는 누적값이다.** 테스트에서 "다 정리됐나"를 볼 때 0이 아니라 **기준선과의 차이**를 본다. 0을 기다리면 앞선 테스트가 남긴 액터 때문에 영원히 기다린다.
+- **종료를 검증하는 테스트는 pending work가 실제로 남았는지 확인할 것.** worker가 발송 속도를 따라잡으면 discard 경로를 한 번도 밟지 않은 채 통과한다. 2026-09-21에 실제로 그랬고, handler에 지연을 넣어 고쳤다(`ActorShutdownTest`의 `HANDLE_DELAY_MS`).
 - **초기화 훅을 요구하는 전역을 되살리지 말 것.** `MyThreadID`·`LEndTickCount`·`LRanGen`·`GThreadManager`가 그런 종류였고 2026-09-15에 정리했다.
 - **budget 소진 횟수를 더 이상 관측할 수 없다.** `budgetExhaustedCount`를 지웠으므로 `DEFAULT_MESSAGE_BUDGET`(32)이 작은지 판단하려면 `messagesHandled / runCount` 평균이 32에 붙는지로 간접 추정해야 한다. 정확히 필요해지면 그때 다시 넣는다.
 - 소스와 헤더는 BOM 없는 UTF-8이고 주석은 한국어다. **MSVC에서 `/source-charset:utf-8`을 빼면 97줄이 CP949 lead byte로 끝나 다음 줄을 주석에 먹힌다.** BOM이 있으면 MSVC가 알아서 UTF-8로 읽으므로 "BOM 없는 UTF-8"이 이 옵션의 전제 조건이다. 근거는 `CMakeLists.txt`의 해당 블록 주석에 있다.
 - **한글 문자열 리터럴을 넣지 말 것.** 실행 문자셋을 강제하지 않으므로(`CMakeLists.txt` 주석 참조) 출력이 실행 환경의 코드 페이지에 따라 갈린다. 2026-09-20에 14줄을 영어로 바꿔 현재는 비ASCII 리터럴이 없다.
-- **문서에 적어둔 사용법은 실제로 한 번 실행해 볼 것.** `add_subdirectory`로 가져다 쓰는 경로가 README에 적혀 있는데 아무도 해본 적이 없어, 소비자가 공개 헤더를 컴파일조차 못 하는 상태가 오래 유지됐다(2026-09-20 #3). 빌드·테스트가 전부 통과해도 그건 "이 레포를 단독으로 빌드할 때"만 검증한 것이다.
+- **문서에 적어둔 사용법은 실제로 한 번 실행해 볼 것.** `add_subdirectory`로 가져다 쓰는 경로가 README에 적혀 있는데 아무도 해본 적이 없어, 소비자가 공개 헤더를 컴파일조차 못 하는 상태가 오래 유지됐다(2026-09-20에 `target_compile_features`로 고쳤다). 빌드·테스트가 전부 통과해도 그건 "이 레포를 단독으로 빌드할 때"만 검증한 것이다. **공개 헤더를 추가하거나 옮기면 이 프로브를 다시 돌린다.**
 - **문서를 지울 때는 끊어진 링크뿐 아니라 "그 문서가 유일한 출처인 정보"가 있는지 먼저 확인할 것.** 요구사항 원문을 지우면서 스케줄러 목표 구조를 통째로 잃은 전례가 있다(2026-09-15, `8d13fd1`에서 복원).
 - **미커밋 변경이 있는 파일에 `git checkout <파일>`을 쓰지 말 것.** HEAD로 되돌아가 그 파일의 미커밋 작업이 전부 사라진다. 2026-09-15에 2차 스케줄러 구현을 이렇게 날렸다(재적용으로 복구). 코드를 임시로 바꿔 실험할 때는 먼저 사본을 떠두고 그것으로 되돌린다.
-- **PowerShell `Set-Content`/`Out-File`로 소스 파일을 쓰지 말 것.** 한글 주석이 깨진다(2026-09-15에 `ActorRuntime.cpp`가 이걸로 깨졌다). 파일을 통째로 바꿔야 하면 Python 바이너리 모드나 `Copy-Item`처럼 바이트를 보존하는 수단을 쓴다.
+- **PowerShell `Set-Content`/`Out-File`로 소스 파일을 쓰지 말 것.** 한글 주석이 깨진다(2026-09-15에 당시의 `ActorRuntime.cpp`가 이걸로 깨졌다). 파일을 통째로 바꿔야 하면 Python 바이너리 모드나 `Copy-Item`처럼 바이트를 보존하는 수단을 쓴다.
 - **어떤 논증이 일부 경로에만 적용되어 있지 않은지 확인할 것.** "Stop은 state만 바꿀 뿐 worker는 여전히 drain 루프 안이다"가 예외 경로에만 적혀 있고 일반 `Stop` 경로에는 빠져 있었으며, 구현도 그대로 빠뜨렸다(2026-09-15).
 - 어디에 무엇을 쓰는지는 [`design/DOC_RULES.md`](design/DOC_RULES.md)에 있다. 같은 내용을 두 곳에 쓰지 말 것.
 - **이 레포는 "왜 그렇게 정했는가"를 보관하지 않는다.** 2026-09-20에 ADR 14개를 제거했다. 기록하는 것은 현재 동작과 "건드리면 깨지는 것"뿐이므로, 동작을 바꾸면 그 서술도 같은 변경에서 함께 고쳐야 한다.

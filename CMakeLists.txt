@@ -19,11 +19,14 @@ FetchContent_MakeAvailable(concurrentqueue)
 add_library(MyUtils STATIC
     src/Assert.cpp
     src/SendBuffer.cpp
-    src/ActorRuntime.cpp
+    src/Runtime.cpp
+    src/Actors.cpp
 
     include/MyUtils/SendBuffer.h
     include/MyUtils/Actor.h
+    include/MyUtils/Runtime.h
     include/MyUtils/Assert.h
+    src/RuntimeInternal.h
 )
 
 # [주의] C++17 요구를 타깃에 싣는다. set(CMAKE_CXX_STANDARD 17)은 디렉터리 스코프

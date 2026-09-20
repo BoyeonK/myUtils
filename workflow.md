@@ -49,34 +49,6 @@ Completion
 
 Workflow 수행 중에는 현재 작업과 관련된 Project Context를 필요한 범위에서 확인한다.
 
-Project Context에는 필요에 따라 다음이 포함될 수 있다.
-
-- project instructions와 repository 구조
-- 관련 코드와 테스트
-- 설계·아키텍처·의사결정 기록
-- 빌드·실행·검증 방법
-- coding/documentation convention
-- 현재 상태, 미결정 사항 및 작업 이력
-
-구체적인 파일명이나 저장 위치는 프로젝트마다 다를 수 있다.
-
-Workflow는 현재 repository를 조사하여 관련 구조와 자료를 발견하고,
-발견한 프로젝트 고유 문맥을 현재 작업에 활용한다.
-
-프로젝트 고유 구조가 현재 작업에서 확인되었다고 해서
-다른 프로젝트에도 같은 구조가 존재한다고 가정하지 않는다.
-
-앞선 단계에서 확인한 Project Context는 이후 단계에서도 유효한 작업 문맥으로 재사용한다.
-
-단, 다음과 같은 경우에는 필요한 범위에서 다시 확인한다.
-
-- repository 상태가 변경되었을 가능성이 있는 경우
-- 코드나 문서가 수정된 경우
-- 기존 전제의 유효성이 의심되는 경우
-- 새로운 정보가 기존 판단과 충돌하는 경우
-
----
-
 ## 3. Workflow 작업 공간
 
 Workflow 자체가 사용하는 작업용 산출물은 프로젝트의 정식 문서와 구분한다.
@@ -97,8 +69,6 @@ Workflow 자체가 사용하는 작업용 산출물은 프로젝트의 정식 �
 
 `.workflow/`는 Workflow가 소유하는 기본 작업 공간이다.
 
-별도의 명확한 이유가 없다면 프로젝트마다 위치를 변경하지 않고 위 구조를 사용한다.
-
 `workflow/`와 `.workflow/`는 서로 다른 위치다.
 
 ```text
@@ -107,10 +77,6 @@ workflow/     규칙 문서
 ```
 
 규칙 문서에 작업 상태를 기록하거나 작업 공간에 규칙 문서를 복사하지 않는다.
-
-프로젝트에 이미 다른 용도의 `workflow/` 디렉터리가 존재한다면 규칙 문서의 위치를 조정한다.
-
-Workflow 자체를 분석하기 위한 기록은 이 작업 공간에 두지 않는다.
 
 세부 규칙은 `진단 기록`을 따른다.
 
@@ -129,8 +95,6 @@ thread-pool
 actor-shutdown
 inventory-save
 ```
-
-사용자나 프로젝트에서 명시적인 task-id를 제공한 경우에는 가능한 한 이를 사용한다.
 
 동일한 task-id가 이미 존재하는 경우에는 먼저 기존 작업의 재개인지 확인한다.
 
@@ -152,17 +116,7 @@ Reviewer: <선택된 Reviewer 또는 none>
 Review Round: <현재 round 또는 0>
 ```
 
-필요에 따라 다음 정보를 추가로 기록할 수 있다.
-
-- 주요 Open Question
-- 관련 Workflow artifact
-- 현재 작업에서 확인한 핵심 Project Context
-- 현재 작업에서 확정된 주요 결정
-- Waived finding과 알려진 risk
-
-상세한 작업 로그나 Project Context 전체를 복사하지 않는다.
-
-현재 상태를 복원하고 다음 작업을 이어가기 위해 필요한 정보만 기록한다.
+현재 상태를 복원하고 다음 작업을 이어가기 위해 필요한 정보를 기록한다.
 
 Workflow 상태가 변경되거나
 이후 단계가 의존하는 중요한 정보가 확정되면
@@ -428,76 +382,3 @@ Completion 조건을 만족하면 현재 작업의 Workflow는 종료된다.
 기존 task의 후속 작업인지 새로운 Workflow 작업인지 현재 요청의 성격에 따라 판단한다.
 
 ---
-
-## 11. 진단 기록
-
-Workflow는 두 종류의 기록을 구분한다.
-
-```text
-Canonical State          Workflow 수행이 실제로 사용하는 정보
-Diagnostic Trace         Workflow 자체를 분석하기 위한 기록
-```
-
-### Canonical State
-
-```text
-.workflow/tasks/<task-id>/
-├─ status.md
-├─ spec.md
-├─ design.md
-├─ review.md
-├─ test-result.md
-└─ completion.md
-```
-
-### Diagnostic Trace
-
-다음과 같은 기록이 해당한다.
-
-- 사용자와 Main AI 사이의 대화 원본
-- Main AI와 Reviewer 사이의 요청과 응답 원본
-- tool 호출과 파일 접근 기록
-- 사용량 metadata
-- Reviewer 실행 컨텍스트 정책 등 실험 조건
-
-Trace는 **Workflow 수행의 입력이 아니다.**
-
-Project Context로 취급하지 않으며, 특히 Reviewer에게 제공하지 않는다.
-
-Workflow 문제 분석이나 audit이 필요한 경우에만 명시적으로 읽는다.
-
-이 구분이 없으면 Trace가 다시 문맥으로 유입되어
-Reviewer 독립성 규칙과 Reviewer 입력 제한이 함께 무력화된다.
-
-### 기록 방식
-
-Trace는 작업 수행 중 AI가 직접 작성하지 않는다.
-
-가능한 한 세션 로그와 tool 로그에서 사후에 추출한다.
-
-측정 대상인 AI가 기록까지 담당하면 다음 문제가 생긴다.
-
-- 기록 작성 자체가 측정 대상인 사용량을 증가시킨다.
-- 문맥이 부족한 실행에서 기록이 가장 먼저 생략되므로, 가장 비쌌던 실행의 기록이 가장 부실해진다.
-- 사용량 수치는 대부분 AI가 직접 알 수 없다.
-
-AI가 남기는 것은 로그에서 자동으로 연결할 수 없는 최소 정보로 제한한다.
-
-- `task-id`와 Main 세션의 대응
-- Review round와 Reviewer 실행의 대응
-- Reviewer에게 전달한 입력 패킷과 반환된 원문
-
-실행 환경에서 이 연결을 자동으로 기록할 수 있다면 AI가 남길 필요가 없다.
-
-### 저장 위치
-
-Trace에는 대화 원문, 코드 일부, 파일 내용, 명령 출력, 환경 정보가 포함될 수 있다.
-
-프로젝트 artifact와 성격이 다르므로 저장소에 커밋하지 않는다.
-
-저장소 외부에 두는 것을 기본으로 한다.
-
-저장소 안에 두는 경우에는 version control에서 완전히 제외하고,
-전체 add 명령으로 실수로 포함되지 않는지 확인한다.
-
-공개 저장소에서는 이 확인을 첫 실행 전에 완료한다.

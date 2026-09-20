@@ -5,6 +5,64 @@
 
 한 파일 안에서 끝나는 규칙은 그 코드 옆 주석에 둔다.
 
+## 0. 런타임 몸체
+
+```
+                 RuntimeBody                  ← 프로세스 전역, 함수 지역 static
+                      │
+        ┌─────────────┴─────────────┐
+        ▼                           ▼
+   WorkerPool                  ActorRegistry
+ (스레드 · 큐 · 수면)          (Actor 논리 수명)
+```
+
+**worker thread pool과 그 위에서 도는 실행 주체가 하나의 몸체다.** 지금 그 위에 있는
+것은 Actor뿐이지만, I/O completion이나 임의 함수자를 얹을 자리가 `WorkerPool`이다.
+둘을 가른 기준이 그 확장 축이다 — 무엇이 추가되어도 `ActorRegistry`는 그대로 남는다.
+
+| | |
+|---|---|
+| 인스턴스 | **프로세스에 하나.** 사용자가 만드는 런타임 객체는 없다 |
+| 기동 | 첫 `Spawn`에서 lazy. 기동 경합은 magic static이 처리한다 |
+| 종료 | **1회.** 재기동도, 부분 종료(pool만 / Actor만)도 없다 |
+| worker 수 | 기본값은 `hardware_concurrency`(0이면 1). `Runtime::SetWorkerCount`로 **기동 전에만** 바꾼다 |
+
+`SetWorkerCount`의 값과 기동 플래그는 **몸체 바깥**의 상수 초기화 전역에 있다. 몸체 안에
+두면 그 호출 자체가 기동을 유발해 API가 자기 목적을 파괴한다. 같은 이유로
+`Runtime::WorkerCount()`와 `Runtime::SnapshotStats()`도 몸체를 만지지 않는다.
+
+### WorkerPool은 Actor를 모른다
+
+큐에 담기는 것은 `Task`(가상 `Execute()` 하나)이고 `ActorControlBlock`이 그 구현 중
+하나다. worker loop는 `task->Execute()`만 부른다.
+
+따라서 **message budget 같은 Actor 정책은 pool이 아니라 ACB가 쥔다.** 이 경계를 허물면
+다른 종류의 작업을 얹을 때 pool 내부를 다시 설계해야 한다.
+
+### 정적 생성 순서 — 지우면 종료 때만 깨진다
+
+> **`RuntimeBody`의 생성자는 worker를 만들기 전에 계측 전역을 먼저 건드린다.**
+
+worker는 계측 블록을 통해 `StatsLock()`/`StatsRegistry()`/`RetiredStats()`를 만지는데,
+몸체가 프로세스 전역 static이므로 이들이 몸체보다 나중에 만들어지면 **먼저 파괴되어
+아직 도는 worker가 죽은 전역을 만진다.**
+
+표준은 static storage duration 객체에 대해 "생성 완료의 역순으로 파괴"를 보장하며
+([basic.start.term]) 함수나 TU 경계를 가리지 않는다. 그래서 생성자에서 먼저 건드려
+순서를 `stats → body`로 고정하면 파괴는 `body → stats`가 되고, join이 끝난 뒤에야
+계측 전역이 사라진다.
+
+**"worker의 `thread_local` 소멸자가 join 중에 도니 안전하다"는 이 자리를 덮지 못한다.**
+join을 시작하는 것이 몸체의 소멸자이므로, 순서가 반대였다면 worker는 join이 시작되기도
+전에 죽은 전역을 만진다.
+
+이 보장은 **몸체가 함수 지역 static 하나**라는 데 선다. 몸체를 `new`로 만들거나 소유자를
+바꾸면 이 절을 다시 세워야 한다.
+
+**알려진 위험.** 소비자가 MyUtils를 DLL에 넣고 언로드하면 `DLL_PROCESS_DETACH`에서
+loader lock을 쥔 채 join하게 되어 교착한다. 현재 사용 형태(정적 라이브러리 + exe 직접
+링크)에서는 발생하지 않는다. 피하려면 `Runtime::Shutdown()`을 명시적으로 부른다.
+
 ## 스케줄러 구조
 
 ```
@@ -25,19 +83,22 @@
 |---|---|---|
 | Actor Mailbox | **MPSC** | producer 여럿 → 실행권을 가진 worker 하나 |
 | Global Injection Queue | **MPMC** | producer 여럿 → worker 여럿이 꺼감 |
-| Worker Local Runnable | **work-stealing deque** | owner는 `push_bottom`/`pop_bottom`, thief는 `steal_top` |
+| Worker Local Task | **work-stealing deque** | owner는 `push_bottom`/`pop_bottom`, thief는 `steal_top` |
 
-local deque는 worker당 `std::mutex` + `std::deque`다(`ActorRuntime.cpp`의 해당 주석 참조).
+local deque는 worker당 `std::mutex` + `std::deque`다(`Runtime.cpp`의 해당 주석 참조).
 
 **어디에 넣는지의 기준은 locality다.**
 
-- worker가 실행 중에 만들어낸 runnable → 그 worker의 local deque
-- 외부 thread, I/O completion thread 등 특정 worker와 연고가 없는 runnable → injection queue
+- worker가 실행 중에 만들어낸 task → 그 worker의 local deque
+- 외부 thread, I/O completion thread 등 특정 worker와 연고가 없는 task → injection queue
 
-판정은 worker loop가 진입할 때 스스로 세팅하는 thread_local `{ActorRuntime*, index}`로
-한다. **런타임 포인터를 함께 보는 것이 필수다** — `ActorSystem`이 둘 이상일 때
-인덱스만 보면 시스템 A의 worker가 만든 B의 runnable이 A의 deque로 샌다
-(`CrossRuntimeIsolation`이 잡는다).
+판정은 worker loop가 진입할 때 스스로 세팅하는 thread_local `{isWorker, index}`로 한다.
+
+> **과거에는 여기에 런타임 포인터도 담았다.** `ActorSystem`이 둘 이상일 때 시스템 A의
+> worker가 만든 B의 runnable이 A의 deque로 새는 것을 막기 위해서였고,
+> `CrossRuntimeIsolation` 테스트가 그것을 잡았다. 런타임이 프로세스 전역 단일이 되면서
+> 비교 대상이 사라져 둘 다 걷어냈다. **전역 단일이라는 전제가 바뀌면 여기부터
+> 되돌려야 한다.**
 
 owner가 LIFO로 최근 work를 처리하고 thief가 반대쪽 오래된 work를 가져가는 것은
 **locality/부하분산 heuristic이지 correctness 조건이 아니다.** Actor가 특정 worker에
@@ -53,8 +114,8 @@ owner가 LIFO로 최근 work를 처리하고 thief가 반대쪽 오래된 work�
 ```
 
 **61회 주기가 없으면 injection이 굶는다.** local deque를 채우는 것은 handler가 만든
-runnable이고, 그게 꾸준한 워크로드에서는 외부 스레드·I/O completion의 runnable이
-무한정 밀린다. `61`은 최적값이 아니라 baseline이다.
+task이고, 그게 꾸준한 워크로드에서는 외부 스레드·I/O completion의 task가 무한정
+밀린다. `61`은 최적값이 아니라 baseline이다.
 
 한 번의 local 처리가 최대 32건(budget)이므로 **injection 확인 간격은 최악의 경우
 메시지 1,952건이다.** 둘 중 하나를 바꾸면 다른 쪽의 의미도 바뀐다.
@@ -81,38 +142,53 @@ deque의 owner이고, owner는 잠들기 전에 자기 deque를 확인하므로 
 ## 1. 소유권 그래프
 
 ```
-ActorSystem
-   │
-   └── shared ──► ActorRuntime
-                     ├── runnable queue ── shared ──► ActorControlBlock
-                     ├── sleep notifier (mutex + cv)
-                     └── Registry ─────── shared ──► ActorControlBlock
-                                                       ▲
-                                    ActorRef ── shared ─┘
+RuntimeBody (프로세스 전역 static)
+   ├── WorkerPool
+   │      ├── injection queue  ── shared ──► Task
+   │      ├── local deque × N  ── shared ──► Task
+   │      └── sleep notifier (mutex + cv)
+   └── ActorRegistry ─────────── shared ──► ActorControlBlock
+                                              ▲
+                           ActorRef ── shared ─┘
 
-                              ActorControlBlock
-                                  ├── unique ──► Actor
-                                  ├── mailbox (mutex + deque<MessagePtr>)
-                                  ├── atomic<ActorState>
-                                  ├── atomic<bool> finalizeStarted
-                                  └── weak ──► ActorRuntime
+                     ActorControlBlock : Task
+                         ├── unique ──► Actor
+                         ├── mailbox (mutex + deque<MessagePtr>)
+                         ├── atomic<ActorState>
+                         └── atomic<bool> finalizeStarted
 ```
-
-Scheduler와 Registry는 역할이 다르지만 **하나의 내부 객체 `ActorRuntime`으로
-합쳐져 있다.** ACB가 둘 다 참조해야 하는데 weak 포인터를 두 개 들 이유가 없어서다.
-아래 표의 소유 방향은 그대로다.
 
 | 참조 | 이유 |
 |---|---|
 | Registry → ACB (**shared**) | Actor의 논리적 수명을 유지한다. `ActorRef`를 다 놓아도 죽지 않는다 |
 | ActorRef → ACB (shared) | 외부 접근 핸들일 뿐. 수명을 결정하지 않는다 |
-| runnable queue → ACB (shared) | 스케줄링 중 ACB를 살려둔다 |
+| pool 큐 → Task (shared) | 스케줄링 중 대상을 살려둔다 |
 | ACB → Actor (**unique**) | Actor mutable state의 유일 소유자. 외부에서 직접 접근할 경로가 없다 |
-| ACB → Runtime (**weak**) | 순환 방지. 시스템이 먼저 사라져도 안전하게 판정 가능 |
+
+**ACB는 런타임을 가리키지 않는다.** 전역 단일이라 인스턴스를 지목할 이유가 없고,
+필요할 때 내부 접근자로 닿는다.
 
 `Finalize`는 함수 진입부에서 `shared_from_this()`로 자기 자신을 붙잡아야 한다.
 Registry unregister가 마지막 참조를 놓으면 그 자리에서 ACB가 파괴되어, 뒤따르는
 `state.store(DEAD)`가 dangling이 된다.
+
+### 수명 invariant — 몸체가 ACB보다 먼저 죽을 수 있다
+
+`RuntimeBody`는 프로세스 전역 static이므로 **소비자가 더 늦게 파괴되는 `ActorRef`를
+들고 있을 수 있다.** 과거에는 `ACB → Runtime`이 `weak_ptr`이라 그 경우가 자동으로
+닫혔다. 지금은 아래 둘이 그 자리를 대신한다.
+
+> **LT1. `Send`의 `STOPPING`/`DEAD` 검사는 몸체 접근보다 반드시 앞선다.**
+> ACB가 몸체에 닿는 경로는 `TrySchedule`(accept된 뒤에만 실행)과 `Finalize`의
+> unregister(once gate 통과 후 1회)뿐이다. 검사가 뒤로 밀리면 stale `ActorRef`의
+> `Send`가 파괴된 몸체를 만진다.
+
+> **LT2. 종료는 Registry의 모든 ACB를 `DEAD`로 만든 뒤 반환한다.**
+> LT1이 의미를 가지려면 "종료 후 살아남은 ACB는 전부 `DEAD`"가 참이어야 한다.
+> §8의 5번이 그것을 만든다. 이 단계를 약화하면 LT1이 무력해진다.
+
+`ActorControlBlock`의 소멸자 자체는 몸체를 만지지 않는다 — 몸체보다 늦게 파괴되는
+`ActorRef`가 마지막 참조를 놓는 것이 정상 경로다.
 
 ---
 
@@ -166,7 +242,7 @@ Finalize가 mailbox discard와 registry unregister를 모두 하므로, 순서�
 
 ### L3. sleep 락은 다른 락을 보유한 채 잡지 않는다
 
-`Scheduler::EnqueueRunnable`이 sleep 락을 만진다. 이 함수는 항상 mailbox 락을 놓은
+`WorkerPool::Submit`이 sleep 락을 만진다. 이 함수는 항상 mailbox 락을 놓은
 뒤에 호출한다.
 
 ### L4. 메시지 파괴는 mailbox 락 밖에서 한다
@@ -190,9 +266,9 @@ unlock(mailbox)                     (한 건씩 pop → 락 해제 → Handle)
 
          ①                        CAS(RUNNING → IDLE)
 CAS(IDLE → SCHEDULED)                       ②
-  성공 시 EnqueueRunnable         lock(mailbox); 비었나?; unlock
+  성공 시 WorkerPool::Submit         lock(mailbox); 비었나?; unlock
                                   안 비었으면 CAS(IDLE → SCHEDULED)
-                                    성공 시 EnqueueRunnable
+                                    성공 시 WorkerPool::Submit
 ```
 
 **순서 제약은 둘뿐이다.** push는 ①보다 **먼저**, 재확인은 ②보다 **나중**.
@@ -214,7 +290,7 @@ lock-free 메일박스로 바꾸면 "비었다"의 의미를 여기서 다시 �
 런타임 전체가 멈춘다.
 
 ```
-EnqueueRunnable(acb)              Worker loop
+WorkerPool::Submit(acb)              Worker loop
 --------------------              -----------
 어느 큐에 넣을지 고르고 push       모든 소스 비었음 확인 → 실패
 { lock(sleep); }  ← 빈 임계구역    lock(sleep)
@@ -225,7 +301,7 @@ notify_one()                        stopping이면 종료
                                     idleCount -= 1
 ```
 
-**빈 임계구역이 장치다.** worker가 "재확인 → wait 진입" 구간에 있으면 `EnqueueRunnable`은
+**빈 임계구역이 장치다.** worker가 "재확인 → wait 진입" 구간에 있으면 `WorkerPool::Submit`은
 락을 얻지 못해 대기하고, worker가 `wait`에 들어가 락을 놓은 뒤에야 notify가 나간다.
 worker가 아직 구간에 들어오지 않았다면 재확인 시점에 push가 이미 끝나 있어 발견한다.
 
@@ -249,18 +325,18 @@ worker가 아직 구간에 들어오지 않았다면 재확인 시점에 push가
 
 ### 유지해야 할 invariant
 
-> **모든 runnable 생성은 Scheduler의 scheduling entry point를 거치며,
+> **모든 task 등록은 `WorkerPool::Submit`을 거치며,
 > 어느 큐에 들어가든 필요한 wakeup notification이 함께 수행된다.**
 
-"모든 runnable을 global queue에 넣는다"는 뜻이 **아니다.** `EnqueueRunnable`은
-locality를 보고 **어느 큐에 넣을지 결정하는 단일 진입점**이다.
+"모든 task를 global queue에 넣는다"는 뜻이 **아니다.** `Submit`은 locality를 보고
+**어느 큐에 넣을지 결정하는 단일 진입점**이다.
 
 ```
-EnqueueRunnable(acb)
-    ├─ tls.runtime == this  → 그 worker의 LocalDeque.push_bottom
-    │                          유휴 worker가 있을 때만 notify
-    └─ 그렇지 않다           → GlobalInjectionQueue.enqueue
-                               항상 notify
+WorkerPool::Submit(task)
+    ├─ tls.isWorker  → 그 worker의 LocalDeque.push_bottom
+    │                    유휴 worker가 있을 때만 notify
+    └─ 그렇지 않다    → GlobalInjectionQueue.enqueue
+                         항상 notify
 ```
 
 위험한 것은 **큐에 직접 넣고 이 진입점을 우회하는 경로**다. 그 경로에서만 worker가
@@ -374,21 +450,30 @@ state.store(DEAD)              ← cleanup 완료 후
 `DEAD`를 마지막에 쓰는 것이 의미상 맞다. STOPPING과 DEAD 사이에도 `Send`는 거부되므로
 (§6) 틈이 생기지 않는다.
 
-Finalize 이후 ACB는 살아 있을 수 있다 — `ActorRef`나 runnable 큐가 참조를 들고 있으면.
-그 상태로 worker가 집어도 Run 진입 CAS가 실패해 **no-op**이 된다.
+Finalize 이후 ACB는 살아 있을 수 있다 — `ActorRef`나 pool 큐가 참조를 들고 있으면.
+그 상태로 worker가 집어도 Execute 진입 CAS가 실패해 **no-op**이 된다.
 
 ---
 
 ## 8. Shutdown sequence
 
+`RuntimeBody::Shutdown`이 순서를 잡는다. **멱등이며, 부분 종료는 없다.**
+
 ```
-1. ActorSystem accepting = false        Registry 락 안에서 설정, Spawn 등록과 선형화
-2. Scheduler stopping = true            sleep 락 안에서 설정 후 notify_all
-3. 모든 worker join                      실행 중인 Handler 완료 대기
-4. 남은 runnable discard             injection과 worker local deque 전부
+1. ActorRegistry accepting = false      Registry 락 안에서 설정, Spawn 등록과 선형화
+2. WorkerPool stopping = true           sleep 락 안에서 설정 후 notify_all
+3. 모든 worker join                      실행 중인 Execute 완료 대기
+4. 남은 Task discard                     injection과 worker local deque 전부
 5. Registry 스냅샷 → 락 밖에서 전부 Stop 후 Finalize
 6. Registry clear
 ```
+
+**3번은 block하고 중단 수단이 없다.** 긴 handler는 곧 긴 종료다. 종료 지연을 제한해야
+한다면 handler 쪽에 시한을 두는 것이 유일한 수단이다(§11).
+
+**4번의 의미는 "pool은 종료 시 남은 Task를 실행하지 않고 버린다"이다.** Actor Task는
+버려도 ACB가 Registry 참조로 살아 있어 5번이 확정적으로 정리한다. 다른 종류의 Task가
+생기면 이 계약을 먼저 본다.
 
 **5번의 스냅샷이 필수다.** Finalize가 registry unregister를 하므로, registry를 순회하며
 Finalize하면 같은 뮤텍스 재획득(데드락) 또는 iterator 무효화가 난다.
@@ -416,7 +501,7 @@ for (acb : snapshot) { acb->Stop(); acb->Finalize(); }   ← 락 밖
 | | 보장 |
 |---|---|
 | Actor 단위 `Stop()` | mailbox 뮤텍스로 **선형화**. boundary 이후 `Send`는 반드시 실패 |
-| System `Shutdown()` | **best-effort**. 경합한 `Send`가 `true`를 받은 뒤 5번에서 discard될 수 있다 |
+| `Runtime::Shutdown()` | **best-effort**. 경합한 `Send`가 `true`를 받은 뒤 5번에서 discard될 수 있다 |
 
 후자는 "`true` = accepted, not delivered" 계약과 일관된다. 다만 강도가 다르다는 것을
 API 문서에 적어야 한다.
@@ -443,24 +528,35 @@ public:
     void Stop() const;                     // 즉시 중단. pending 메시지 discard
 };
 
-class ActorSystem {
-public:
-    explicit ActorSystem(std::size_t workerCount);   // workerCount >= 1 강제
-    ~ActorSystem();                                   // Shutdown 포함
-    [[nodiscard]] ActorRef Spawn(std::unique_ptr<Actor> actor);
-    void Shutdown();
-    std::size_t WorkerCount() const noexcept;
-    std::size_t LiveActorCount() const;              // 계측·테스트용
-};
+// MyUtils/Actor.h — namespace MyUtils::Actors
+[[nodiscard]] ActorRef Spawn(std::unique_ptr<Actor> actor);   // 첫 호출이 런타임을 기동
+std::size_t LiveActorCount();                                 // 계측·테스트용. 전역 누적값
+inline constexpr std::size_t DEFAULT_MESSAGE_BUDGET = 32;
+
+// MyUtils/Runtime.h — namespace MyUtils::Runtime
+void SetWorkerCount(std::size_t count);   // 기동 전에만. 위반은 MYUTILS_ASSERT
+std::size_t WorkerCount() noexcept;       // 기동시키지 않는다
+void Shutdown();                          // 몸체 전체. 멱등. block한다
+struct Stats { /* ... */ };
+Stats SnapshotStats();                    // 기동시키지 않는다
+inline constexpr std::size_t INJECTION_POLL_INTERVAL = 61;
 ```
+
+**사용자가 만드는 런타임 객체는 없다.** `ActorSystem`은 2026-09-21에 제거되었다.
 
 `Spawn`이 `unique_ptr`을 받는 것이 중요하다. `shared_ptr`이면 호출자가 Actor state에
 직접 접근할 수 있어 isolation invariant가 **API 수준에서** 뚫린다.
 
-`workerCount == 0`은 "Send는 성공하는데 아무도 처리하지 않는" 상태를 만들므로 막는다.
+`SetWorkerCount(0)`은 "Send는 성공하는데 아무도 처리하지 않는" 상태를 만들므로 막는다.
+기동 후 호출도 막는다 — **설정이 조용히 무시되는 것이 최악**이기 때문이다. 기동 전
+반복 호출은 마지막 값이 이긴다.
+
+`LiveActorCount()`는 런타임이 전역이라 **전역 누적값**이다. 특정 Actor가 정리되었는지
+보려면 기준선을 잡고 그 차이를 본다.
 
 메시지 budget은 한 번 실행에 **32건 고정**이다. 소진 후 메일박스가 비지 않았으면
-프로토콜 A의 재확인 경로로 재등록된다.
+프로토콜 A의 재확인 경로로 재등록된다. **이 상수는 Actor의 정책이므로 ACB가 쥔다** —
+`WorkerPool`은 알지 못한다.
 
 ---
 
@@ -469,43 +565,66 @@ public:
 스펙이 코드와 어긋나는 것을 막는 장치다. 각 invariant는 자신을 검증하는 테스트를
 가진다. 테스트가 깨지면 스펙이 틀렸거나 코드가 틀렸거나 둘 중 하나다.
 
-| Invariant | Test |
-|---|---|
-| 동일 Actor가 동시에 두 worker에서 실행되지 않는다 | `ConcurrentExecutionForbidden` |
-| 다중 producer가 동시에 보내도 corruption/유실이 없다 | `MultiProducerMailbox` |
-| enqueue와 IDLE 전이 경합에서 메시지가 유실되지 않는다 | `MessageNotLostDuringIdleTransition` |
-| Actor 종료 후 runnable이 실행돼도 UAF가 없다 | `DelayedRunnableAfterStop` |
-| 동일 Actor가 서로 다른 worker에서 실행돼도 정상 동작한다 | `ActorMigratesBetweenWorkers` |
-| Stop boundary 이후 `Send`는 성공하지 않는다 | `SendAfterStopRejected` |
-| Stop과 Send가 경합해도 UAF가 없다 | `StopSendRace` |
-| Shutdown 후 stale `ActorRef`의 `Send`는 실패한다 | `SendAfterShutdownRejected` |
-| Shutdown gate 이후 Registry에 새 Actor가 등록되지 않는다 | `SpawnConcurrentWithShutdownRejected` |
-| 남은 메시지/runnable이 있어도 shutdown이 안전하다 | `ShutdownWithPendingWork` |
-| **`Handle` 중 mailbox 락을 보유하지 않는다** (L1) | `SelfSendFromHandler` |
-| | `SelfStopFromHandler` |
-| | `SpawnFromHandler` |
-| Handler 예외 후 추가 메시지를 처리하지 않는다 | `HandlerExceptionStopsActor` |
-| **Stop 이후 pending 메시지를 처리하지 않는다** (consumption boundary, §6) | `SelfStopFromHandler` |
-| local deque에 쌓인 일을 다른 worker가 나눠 가진다 | `WorkStealingBalancesLoad` |
-| worker가 아닌 스레드의 `Send`도 처리된다 | `InjectionFromExternalThread` |
-| local 작업이 꾸준해도 injection이 굶지 않는다 | `InjectionNotStarvedByLocalWork` |
-| **다른 런타임의 local deque로 runnable이 새지 않는다** | `CrossRuntimeIsolation` |
+**실행 파일이 넷인 것은 취향이 아니라 제약이다.** 런타임이 전역 단일이고 1회 기동·1회
+종료라, 한 프로세스는 **worker 수 하나와 종료 한 번**만 가질 수 있다. 필요한 런타임
+형상이 다르면 프로세스를 나눠야 한다.
+
+| Invariant | Test | 실행 파일 |
+|---|---|---|
+| 동일 Actor가 동시에 두 worker에서 실행되지 않는다 | `ConcurrentExecutionForbidden` | `ActorTest` (4) |
+| 다중 producer가 동시에 보내도 corruption/유실이 없다 | `MultiProducerMailbox` | `ActorTest` |
+| enqueue와 IDLE 전이 경합에서 메시지가 유실되지 않는다 | `MessageNotLostDuringIdleTransition` | `ActorTest` |
+| Actor 종료 후 task가 실행돼도 UAF가 없다 | `DelayedRunnableAfterStop` | `ActorTest` |
+| 동일 Actor가 서로 다른 worker에서 실행돼도 정상 동작한다 | `ActorMigratesBetweenWorkers` | `ActorTest` |
+| Stop boundary 이후 `Send`는 성공하지 않는다 | `SendAfterStopRejected` | `ActorTest` |
+| Stop과 Send가 경합해도 UAF가 없다 | `StopSendRace` | `ActorTest` |
+| **`Handle` 중 mailbox 락을 보유하지 않는다** (L1) | `SelfSendFromHandler` | `ActorTest` |
+| | `SelfStopFromHandler` | `ActorTest` |
+| | `SpawnFromHandler` | `ActorTest` |
+| Handler 예외 후 추가 메시지를 처리하지 않는다 | `HandlerExceptionStopsActor` | `ActorTest` |
+| **Stop 이후 pending 메시지를 처리하지 않는다** (consumption boundary, §6) | `SelfStopFromHandler` | `ActorTest` |
+| local deque에 쌓인 일을 다른 worker가 나눠 가진다 | `WorkStealingBalancesLoad` | `ActorTest` |
+| worker가 아닌 스레드의 `Send`도 처리된다 | `InjectionFromExternalThread` | `ActorTest` |
+| local 작업이 꾸준해도 injection이 굶지 않는다 | `InjectionNotStarvedByLocalWork` | `ActorSingleWorkerTest` (1) |
+| 종료·Spawn gate·stale `Send`·멱등 종료 | `ShutdownScenario` | `ActorShutdownTest` (2) |
+| worker 수를 설정하지 않아도 동작한다 | `RunsWithoutConfiguration` | `RuntimeConfigTest` (기본값) |
+| `WorkerCount()`가 런타임을 기동시키지 않는다 | `WorkerCountConfiguration` | `ActorTest` |
+| ~~다른 런타임의 local deque로 task가 새지 않는다~~ | ~~`CrossRuntimeIsolation`~~ | **폐기** |
 
 **L1은 락 보유를 직접 관측하지 않는다.** 대신 어겼을 때 반드시 데드락하는 세 가지
 사용 패턴을 테스트한다. 관측 가능한 결과로 invariant를 잡는 방식이다.
+
+같은 이유로 **LT1(§1)도 직접 관측하지 않는다.** 몸체가 프로세스 전역이라 프로세스 안에서
+파괴시킬 수 없다. 종료 후 stale `Send`/`Stop`이 크래시 없이 `false`를 돌려주는 것으로
+간접 확인한다.
+
+**`CrossRuntimeIsolation`은 2026-09-21에 폐기되었다.** 런타임이 전역 단일이 되어 복수
+런타임이라는 상황 자체가 성립하지 않는다.
+
+**`InjectionNotStarvedByLocalWork`가 자기 실행 파일을 갖는 이유**는 worker가 하나여야
+결정적이기 때문이다. worker가 여럿이면 다른 worker가 훔쳐가 상황이 만들어지지 않고,
+나머지를 handler로 붙잡아 재현하려 해도 어느 worker에 배정될지 보장되지 않는다.
+
+**`ShutdownScenario`가 종료 관련 invariant를 한 덩어리로 담는 이유**는 종료가 프로세스당
+한 번뿐이기 때문이다. 하나의 종료에 pending work·경합 Spawn·stale `Send`·멱등 재호출을
+모두 얹는다.
 
 
 ---
 
 ## 11. 알려진 제약
 
-- **Actor 간 공정성을 보장하지 않는다.** runnable이 된 Actor의 eventual execution은
+- **Actor 간 공정성을 보장하지 않는다.** 스케줄된 Actor의 eventual execution은
   보장 대상이 아니다. worker가 하나뿐이고 어떤 Actor가 handler마다 자기 자신에게 메시지를
   보내면, 그 Actor가 local deque 뒤쪽에 계속 재등록되어 앞쪽의 다른 Actor가 실행되지 않을
   수 있다(훔쳐갈 worker가 없다). **이 상태는 스케줄러가 고칠 문제가 아니라 생산이 소비를
   넘어섰다는 신호로 본다** — worker 수나 생산 쪽에서 대응한다.
-- **Handler는 무한정 block하지 않아야 한다.** block하면 shutdown의 worker join도
-  끝나지 않는다. 설계가 감수하는 제약이다.
+- **Handler는 무한정 block하지 않아야 한다.** block하면 `Runtime::Shutdown`의 worker
+  join도 끝나지 않는다. **중단 수단은 없고 만들지 않는다.** 설계가 감수하는 제약이며,
+  종료 지연을 제한해야 한다면 handler 쪽에 시한을 두는 것이 유일한 수단이다.
+- **종료 이후에는 pool도 쓸 수 없다.** 런타임 전체가 하나의 몸체라 재기동도 부분 종료도
+  없다. 추후 I/O·임의 함수자를 얹을 때, "Actor를 다 정리한 뒤에도 I/O는 돌아야 하는가"를
+  먼저 결정해야 한다.
 - **`Stop()`은 graceful stop이 아니다.** accept된 메시지도 버린다. "마지막 저장
   메시지를 보내고 Stop"은 조용히 실패한다. graceful이 필요해지면 `StopAfterDrain()`을
   별도 API로 추가한다 — `Stop`에 drain 의미를 섞지 않는다.

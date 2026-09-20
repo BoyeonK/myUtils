@@ -23,13 +23,13 @@
 | 구성 요소 | 공개 헤더 | 설명 |
 |---|---|---|
 | 송신 버퍼 | `MyUtils/SendBuffer.h` | thread-local bump allocator와 참조 카운트 chunk를 이용해 비동기 송신 데이터의 수명을 관리한다. `Reserve` → `Commit`으로 쓰기 영역을 불변 `SendView`로 전환한다. |
-| Actor Runtime | `MyUtils/Actor.h` | MPSC mailbox, atomic 상태 머신, worker-local deque와 work stealing을 갖춘 경량 Actor 실행 환경이다. Actor별 message handler 실행을 직렬화한다. |
+| Actor Runtime | `MyUtils/Runtime.h`, `MyUtils/Actor.h` | worker thread pool 위에서 도는 경량 Actor 실행 환경이다. MPSC mailbox, atomic 상태 머신, worker-local deque와 work stealing을 갖추고 Actor별 message handler 실행을 직렬화한다. pool은 프로세스 전역 단일이며 첫 사용에 기동한다. |
 
-두 구성 요소 모두 자기 계측을 갖고 있으며 각자의 공개 헤더에서 `SnapshotStats()`로
-조회한다. 비용이 chunk당 또는 배치당이라 항상 켜져 있고, 켜고 끄는 스위치는 없다.
+두 구성 요소 모두 자기 계측을 갖고 있으며 `SnapshotStats()`로 조회한다. 비용이 chunk당
+또는 배치당이라 항상 켜져 있고, 켜고 끄는 스위치는 없다.
 
-라이브러리에는 애플리케이션 진입점이나 범용 스레드 관리 프레임워크가 없다. 각 구성 요소의
-구체적인 계약과 제약은 공개 헤더 및 [`design/`](design/) 문서를 기준으로 한다.
+라이브러리에는 애플리케이션 진입점이 없다. 각 구성 요소의 구체적인 계약과 제약은 공개
+헤더 및 [`design/`](design/) 문서를 기준으로 한다.
 
 ## 프로젝트에 연결하기
 
@@ -86,10 +86,12 @@ MyUtils::Network::SendView view = std::move(buffer).Commit(payloadSize);
 
 `SendView`는 복사 가능한 읽기 전용 객체이며, 복사본이 살아 있는 동안 내부 chunk도 유지된다.
 
-Actor는 `ActorSystem`이 소유하고 `ActorRef`를 통해서만 메시지를 받는다.
+Actor는 런타임이 소유하고 `ActorRef`를 통해서만 메시지를 받는다. 사용자가 만드는 런타임
+객체는 없다 — 첫 `Spawn`이 worker thread pool을 기동시킨다.
 
 ```cpp
 #include <MyUtils/Actor.h>
+#include <MyUtils/Runtime.h>
 
 #include <memory>
 #include <utility>
@@ -113,8 +115,10 @@ private:
     int _y = 0;
 };
 
-MyUtils::Actors::ActorSystem actors(4);
-auto player = actors.Spawn(std::make_unique<Player>());
+// (선택) 기동 전에만 바꿀 수 있다. 부르지 않으면 hardware_concurrency를 쓴다.
+MyUtils::Runtime::SetWorkerCount(4);
+
+auto player = MyUtils::Actors::Spawn(std::make_unique<Player>());
 auto move = std::make_unique<Move>();
 move->x = 10;
 move->y = 20;
@@ -122,17 +126,26 @@ player.Send(std::move(move));
 ```
 
 `ActorRef::Send()`의 `true`는 메시지가 접수되었다는 뜻이며 최종 처리를 보장하지 않는다.
-이후 `Stop()`이나 `Shutdown()`이 pending 메시지를 버릴 수 있다. 자세한 실행 규약은
-[`design/actor-runtime.md`](design/actor-runtime.md)에 있다.
+이후 `Stop()`이나 런타임 종료가 pending 메시지를 버릴 수 있다.
+
+런타임은 **프로세스에 하나이고 1회 기동·1회 종료한다.** 재기동도, pool만 멈추는 부분
+종료도 없다. 종료는 선택이며(프로세스 종료 시 자동으로 수행된다) 실행 중인 handler가
+끝날 때까지 block한다.
+
+```cpp
+MyUtils::Runtime::Shutdown();   // 멱등
+```
+
+자세한 실행 규약은 [`design/actor-runtime.md`](design/actor-runtime.md)에 있다.
 
 계측값은 다음과 같이 조회한다.
 
 ```cpp
-#include <MyUtils/Actor.h>
+#include <MyUtils/Runtime.h>
 #include <MyUtils/SendBuffer.h>
 
 // 측정할 workload를 실행한 뒤 통계를 조회한다.
-auto actorStats = MyUtils::Actors::SnapshotStats();
+auto runtimeStats = MyUtils::Runtime::SnapshotStats();
 auto bufferStats = MyUtils::Network::SnapshotStats();
 ```
 
