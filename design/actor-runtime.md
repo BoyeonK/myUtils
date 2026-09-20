@@ -493,6 +493,11 @@ public:
 
 ## 11. 알려진 제약
 
+- **Actor 간 공정성을 보장하지 않는다.** runnable이 된 Actor의 eventual execution은
+  보장 대상이 아니다. worker가 하나뿐이고 어떤 Actor가 handler마다 자기 자신에게 메시지를
+  보내면, 그 Actor가 local deque 뒤쪽에 계속 재등록되어 앞쪽의 다른 Actor가 실행되지 않을
+  수 있다(훔쳐갈 worker가 없다). **이 상태는 스케줄러가 고칠 문제가 아니라 생산이 소비를
+  넘어섰다는 신호로 본다** — worker 수나 생산 쪽에서 대응한다.
 - **Handler는 무한정 block하지 않아야 한다.** block하면 shutdown의 worker join도
   끝나지 않는다. 설계가 감수하는 제약이다.
 - **`Stop()`은 graceful stop이 아니다.** accept된 메시지도 버린다. "마지막 저장

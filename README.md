@@ -2,7 +2,7 @@
 
 `MyUtils`는 내가 만드는 게임 서버를 비롯한 개인 프로젝트에서 재사용할 런타임 기반
 요소를 모으는 C++17 정적 라이브러리다. 불특정 다수를 위한 범용 라이브러리나 실행 가능한
-프레임워크보다는, 내 프로젝트에 필요한 작고 독립적인 부품을 만드는 데 초점을 둔다.
+프레임워크보다는, 내 프로젝트에 필요한 작고 조합 가능한 부품을 만드는 데 초점을 둔다.
 
 동시에 이 저장소는 AI 코딩 에이전트를 실제 개발 과정에 적용해 보는 학습 및 실험
 프로젝트다.
@@ -155,13 +155,12 @@ ctest --test-dir build -C Debug --output-on-failure
 - [`CLAUDE.md`](CLAUDE.md): 모든 코딩 에이전트가 공유하는 현재 프로젝트 문맥과 작업 규칙
 - [`design/`](design/): 여러 파일에 걸친 실행 규약과 컴포넌트 설계
 - [`design/DOC_RULES.md`](design/DOC_RULES.md): 무엇을 어느 문서에 쓰는가
-- [`design/OPEN_QUESTIONS.md`](design/OPEN_QUESTIONS.md): 아직 결정하지 못한 설계 문제
-- [`progress.md`](progress.md): 완료 이력과 바로 착수할 수 있는 후속 작업
+- [`progress.md`](progress.md): 완료 이력과 바로 착수할 수 있는 후속 작업, 알려진 이슈
 
 **"왜 그렇게 정했는가"는 저장하지 않는다.** 기록하는 것은 현재 동작과 "무엇을 건드리면
 깨지는가"뿐이며, 전자는 코드 주석과 `design/`에, 후자는 그 옆에 함께 둔다.
 
 코드 변경은 관련 계약을 먼저 확인하고, 구현 후 해당 invariant를 검증하는 테스트를
 실행하는 흐름을 따른다. README에는 오래 유지되는 프로젝트 목적과 사용법만 적고, 수시로
-바뀌는 진행 상태와 미결정 문제는 각각 [`progress.md`](progress.md)와
-[`design/OPEN_QUESTIONS.md`](design/OPEN_QUESTIONS.md)에서 관리한다.
+바뀌는 진행 상태는 [`progress.md`](progress.md)에서 관리한다. 아직 정하지 못한 것은
+문서에 쌓지 않고 결정해서 현재 동작 서술에 반영한다.

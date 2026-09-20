@@ -8,9 +8,6 @@
 
 ### Actor Runtime
 
-- [x] (2026-09-15 #16) 스케줄러의 목표 구조(worker-local work-stealing deque + global injection queue)를 문서에 복원했다. 현재의 단일 global queue가 최종 architecture decision인 것처럼 문서화되어 있었는데, 실제로는 correctness를 먼저 검증하려고 단순화한 baseline scheduler다. 요구사항 원문을 삭제할 때 끊어진 링크만 확인하고 그 문서에만 있던 정보를 확인하지 않은 것이 원인이다.
-- [x] (2026-09-15 #17) drain 루프에 consumption boundary를 추가했다. `Stop()`은 state만 바꿀 뿐 worker는 여전히 루프 안이라, pop 전에 상태를 재확인하지 않으면 Stop 이후에도 pending 메시지를 budget 한도까지 처리해 "pending을 버린다"는 계약이 타이밍에 따라 0~31건 사이로 흔들렸다. 검사를 mailbox 락 안에 둬서 "Stop이 그 락을 통과한 뒤로는 어떤 메시지도 새로 pop되지 않는다"가 성립하게 했고, `SelfStopFromHandler`가 pending 미실행까지 검증하도록 강화했다(검사를 빼면 `handled == 4`로 깨지는 것을 확인).
-- [x] (2026-09-15 #18) 2차 스케줄러를 구현했다. 단일 global queue를 injection queue로 축소하고 worker-local deque(worker당 mutex + deque)와 work stealing을 붙였으며, 두 큐의 notify 성격이 다르다는 점(injection은 correctness, local은 heuristic)에 따라 알림 정책을 분리했다(Q-008·Q-009). 구현 중 문서에 없던 함정 둘을 찾아 테스트로 고정했다 — 다중 `ActorSystem`에서 TLS가 worker index만 담으면 runnable이 남의 deque로 새는 것(`CrossRuntimeIsolation`), local 우선만 두면 injection이 굶는 것(`InjectionNotStarvedByLocalWork`).
 - [x] (2026-09-15 #19) `Spawn()`과 `Shutdown()`의 Registry 등록 경합을 수정했다. `Spawn`이 accepting 확인을 통과한 뒤 ACB 할당에서 멈추고, 그 사이 `Shutdown`이 빈 Registry의 snapshot/clear를 끝내면 종료 후 Actor가 등록되어 `LiveActorCount()==1`이고 `Send()==true`가 되는 실행을 결정적으로 재현했다. accepting gate 변경과 Registry 등록을 같은 Registry 락으로 선형화해, 먼저 등록된 Actor는 shutdown snapshot에 반드시 포함되고 늦은 등록은 무효 `ActorRef`로 거부되게 했다. `SpawnConcurrentWithShutdownRejected`가 해당 경합 창을 고정한다.
 
 ### 빌드 / 이식성
@@ -24,13 +21,16 @@
 - [x] (2026-09-20 #0) ADR 14개(`design/adr/`, 1,471줄)와 그것을 전제로 쓰인 문서 규칙을 전부 제거하고, 남길 가치가 있는 4건(allocator 용도 한정, 정렬 미보장, 메시지 전역 FIFO, 구현체 선택 우선순위)만 코드 주석과 `CLAUDE.md`로 이관했다. 이 레포가 보관하는 것을 "현재 동작과 건드리면 깨지는 것"으로 한정해, 변경할 때마다 읽어야 하는 제약 문서를 없애기 위한 것이다. 재검토 조건이 사라지면서 그 조건 전용이던 계측(chunk 고정 시간, `budgetExhaustedCount`, `notifySkippedCount`, steal 지표 둘, 3단 전체)과 `Profiling.h`·`SetProfilingEnabled` API도 함께 걷어냈고, `WorkStealingBalancesLoad`는 steal 카운터 대신 "처리한 worker가 2개 이상"으로 검증하게 바꿨다.
 - [x] (2026-09-20 #4) 부트스트랩 문서에서 컴포넌트 세부를 걷어내고 `design/` 아래 주제별 문서로 분리했다(`send-buffer.md`·`threading.md`·`instrumentation.md`·`DOC_RULES.md` 신규). 모든 세션이 항상 읽는 자리라 크기 자체가 비용인데, Actor 쪽 서술은 `actor-runtime.md`와 완전히 중복이었고 SendBuffer 쪽은 헤더 주석과 겹쳐 있었다. `CLAUDE.md`가 218줄에서 57줄이 됐고, 끊어진 참조(`AGENTS.md`·`README.md`·이 파일의 "문서 구조" 절 링크)도 함께 고쳤다.
 - [x] (2026-09-20 #5) 금지 사항 6개를 감사해 3개로 줄였다. 성격이 안 맞는 둘(`MYUTILS_ASSERT` 정책, 언어 규약)은 다른 절로 옮기거나 지웠고, PCH 재도입 금지는 나쁜 사례 하나로 메커니즘을 막고 있어 삭제했으며, `add_library` 항목은 실제 위험(`file(GLOB)` 전환)이 걸릴 자리인 `CMakeLists.txt` 주석으로 내렸다. 그 과정에서 한글 문자열 리터럴 14줄을 영어로 바꿨다 — 실행 문자셋을 강제하지 않아 환경마다 출력이 갈리기 때문이다.
+- [x] (2026-09-20 #6) 부트스트랩의 두 절(금지 사항·설계 제약)에서 상태 서술을 걷어내고 규칙만 남겼다. "공개 매크로는 하나뿐이다"처럼 `grep` 한 줄로 확인되는 사실은 문서에 캐싱하면 동기화 의무만 생기고, 컴파일러 분기 위치 나열은 실제로 하루 만에 낡았다. 성격이 안 맞던 "설계와 코드가 어긋나면 보고한다"는 `작업 절차`로 옮겼고, 컴포넌트 간 의존을 단방향으로 제한하는 규칙을 새로 넣었다.
+- [x] (2026-09-20 #7) 문서가 단언하던 두 가지가 코드와 달라 정정했다. "전역 변수가 하나도 없다"고 되어 있었지만 계측 레지스트리·chunk pool·live chunk 카운터가 있고, "스레드를 만들거나 관리하는 코드가 없다"고 되어 있었지만 `ActorRuntime`이 worker를 만들고 join한다. 실제로 지키는 것은 "초기화 시점을 요구하는 전역을 두지 않는다"와 "중앙 스레드 관리 주체를 요구하지 않는다"이므로 그렇게 다시 썼다.
+- [x] (2026-09-20 #8) `design/OPEN_QUESTIONS.md`를 파기하고 참조 11곳을 정리했다. 쓰기 권한이 동등한 여러 에이전트가 같은 문서에 의견을 쌓는다는 전제가 현재 구조(작업 AI + 읽기 전용 리뷰어 + 결정권자)와 맞지 않았고, Q-001~Q-009도 전부 대화로 닫혔다. 유일하게 열려 있던 Q-010은 "Actor 간 공정성을 보장하지 않으며 이 상황은 생산이 소비를 넘어섰다는 신호로 본다"로 결론이 나서 `design/actor-runtime.md`의 알려진 제약으로 옮겼다.
 
 ---
 
 ## TODO
 
-**오늘 바로 착수할 수 있는 것**만 여기 적는다. 먼저 골라야 할 게 있는 사안은
-[`design/OPEN_QUESTIONS.md`](design/OPEN_QUESTIONS.md)에 있다.
+**오늘 바로 착수할 수 있는 것**만 여기 적는다. 먼저 정해야 할 것이 남은 사안은
+여기 적지 말고 보고해서 결정을 받는다.
 
 ### 중간
 
@@ -44,21 +44,11 @@
 
 ---
 
-## 결정 대기
-
-- [ ] **Q-010 — worker-local LIFO의 Actor 간 공정성 semantics.** 단일 worker에서
-  계속 재등록되는 Actor가 앞쪽의 오래된 Actor를 무기한 굶길 수 있음이 확인됐다.
-  결정과 근거는 [`design/OPEN_QUESTIONS.md`](design/OPEN_QUESTIONS.md#q-010-worker-local-lifo가-actor를-무기한-굶겨도-되는가)에 둔다.
-
-Q-001~Q-009는 전부 닫혔다(2026-09-15). 결론은 코드 주석과 `CLAUDE.md`, `design/actor-runtime.md`의 현재 동작 서술에 반영되어 있다. 번호는 재사용하지 않으며 Q-010만 결정 대기 중이다.
-
----
-
 ## 알려진 이슈 · 메모
 
 - 2026-09-15에 레거시(액터/메시지 시스템, 오브젝트 풀, MPSC 큐, 타이머 스케줄러, 전역 변수 일체)를 제거하고 Actor Runtime을 백지에서 다시 만들었다. 현재 구성은 **송신 버퍼 + Actor Runtime** 둘이다. 제거 직전 구현은 git 히스토리(`2ce7019` 이전)에 있다.
-- **스레드를 만들거나 관리하는 코드가 라이브러리에 없다.** `ThreadManager`는 사용처가 0이었고 `Join()`에 data race까지 있어 2026-09-15에 삭제했다. Actor Runtime은 자기 worker를 직접 만든다.
-- **전역 변수와 `thread_local` 전역이 하나도 없다.** `MyThreadID`·`LEndTickCount`·`LRanGen`·`GThreadManager`가 전부 선언만 되고 쓰이지 않던 죽은 코드여서 함께 정리했다. 재작성 과정에서 다시 들이지 말 것.
+- **중앙 스레드 관리 주체가 없다.** 스레드가 필요한 컴포넌트가 자기 것을 만들어 소유한다(`ActorRuntime`이 worker를 만들고 join한다). `ThreadManager`는 사용처가 0이었고 `Join()`에 data race까지 있어 2026-09-15에 삭제했다.
+- **초기화 시점을 요구하는 전역이 없다.** 계측 레지스트리와 chunk pool 같은 프로세스 전역 상태는 있지만 전부 함수 지역 `static`이거나 상수 초기화라, `InitTLS()` 같은 훅을 먼저 불러야 하는 계약이 없다. 과거의 `MyThreadID`·`LEndTickCount`·`LRanGen`·`GThreadManager`가 그런 종류였고 2026-09-15에 정리했다 — 다시 들이지 말 것. 상세: [`design/threading.md`](design/threading.md)
 - `SnapshotStats()`는 살아 있는 스레드의 카운터를 잠금 없이 읽는다. 통계 목적의 의도된 benign race이며, 정확한 값이 필요하면 대상 스레드를 join한 뒤 읽어야 한다.
 - **budget 소진 횟수를 더 이상 관측할 수 없다.** `budgetExhaustedCount`를 지웠으므로 `DEFAULT_MESSAGE_BUDGET`(32)이 작은지 판단하려면 `messagesHandled / runCount` 평균이 32에 붙는지로 간접 추정해야 한다. 정확히 필요해지면 그때 다시 넣는다.
 - 소스와 헤더는 BOM 없는 UTF-8이고 주석은 한국어다. **MSVC에서 `/source-charset:utf-8`을 빼면 97줄이 CP949 lead byte로 끝나 다음 줄을 주석에 먹힌다.** BOM이 있으면 MSVC가 알아서 UTF-8로 읽으므로 "BOM 없는 UTF-8"이 이 옵션의 전제 조건이다. 근거는 `CMakeLists.txt`의 해당 블록 주석에 있다.
