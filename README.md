@@ -154,6 +154,7 @@ ctest --test-dir build -C Debug --output-on-failure
 - [`AGENTS.md`](AGENTS.md): Codex가 저장소에 진입할 때 읽는 안내
 - [`CLAUDE.md`](CLAUDE.md): 모든 코딩 에이전트가 공유하는 현재 프로젝트 문맥과 작업 규칙
 - [`design/`](design/): 여러 파일에 걸친 실행 규약과 컴포넌트 설계
+- [`design/DOC_RULES.md`](design/DOC_RULES.md): 무엇을 어느 문서에 쓰는가
 - [`design/OPEN_QUESTIONS.md`](design/OPEN_QUESTIONS.md): 아직 결정하지 못한 설계 문제
 - [`progress.md`](progress.md): 완료 이력과 바로 착수할 수 있는 후속 작업
 

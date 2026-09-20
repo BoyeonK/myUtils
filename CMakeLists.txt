@@ -9,10 +9,15 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(concurrentqueue)
 
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+
+
+# [주의] 목록을 file(GLOB)으로 바꾸지 말 것. CMake가 파일 추가를 감지하지 못해
+# 새 파일이 빠진 채로 빌드가 성공한다(CONFIGURE_DEPENDS도 생성기에 따라 보장되지
+# 않는다). 새 소스는 여기에 직접 넣는다 -- 빠뜨리면 링커가 잡아준다.
+# 헤더도 함께 적혀 있는데 그쪽은 IDE 표시용이라 빌드에는 영향이 없다.
 add_library(MyUtils STATIC
+    src/Assert.cpp
     src/SendBuffer.cpp
     src/ActorRuntime.cpp
 
@@ -21,13 +26,27 @@ add_library(MyUtils STATIC
     include/MyUtils/Assert.h
 )
 
-# 소스와 헤더는 전부 UTF-8이다. MSVC는 기본적으로 시스템 코드 페이지(한국어
-# 환경이면 949)로 읽기 때문에, 한글 주석의 마지막 바이트가 lead byte로 오해되어
-# 줄바꿈까지 삼키고 다음 줄이 주석에 먹히는 일이 실제로 발생한다.
-# 공개 헤더에도 한글 주석이 있으므로 PUBLIC으로 전파한다.
-if(MSVC)
-    target_compile_options(MyUtils PUBLIC /utf-8)
-endif()
+# [주의] C++17 요구를 타깃에 싣는다. set(CMAKE_CXX_STANDARD 17)은 디렉터리 스코프
+# 변수라 add_subdirectory로 가져다 쓰는 소비자에게 전파되지 않는다. 공개 헤더가 중첩
+# 네임스페이스·std::byte·inline constexpr을 쓰므로, 이게 없으면 소비자 타깃이 컴파일러
+# 기본 표준(MSVC는 C++14)으로 공개 헤더를 컴파일하다 C2429로 실패한다.
+target_compile_features(MyUtils PUBLIC cxx_std_17)
+
+# 소스와 공개 헤더는 BOM 없는 UTF-8이다. MSVC만 기본값이 시스템 코드 페이지(한국어
+# 환경이면 949)라, 한글 주석의 마지막 바이트가 lead byte로 오해되어 줄바꿈까지 삼키고
+# 다음 줄이 주석에 먹히는 일이 실제로 발생한다. gcc/clang은 UTF-8이 기본이라 필요 없다.
+#
+# 공개 헤더에도 한글 주석이 있으므로 PUBLIC으로 전파하되, 소비자 타깃의 컴파일러로
+# 판정되도록 제너레이터 표현식을 쓴다. if(MSVC)로 쓰면 이 프로젝트를 configure한
+# 컴파일러로 결정이 굳어 그대로 소비자에게 넘어간다.
+#
+# [주의] /utf-8이 아니라 /source-charset:utf-8이다. 전자는 실행 문자셋까지 UTF-8로
+# 강제해 소비자 TU 전체의 리터럴 인코딩을 이쪽에서 정해버린다. 헤더를 올바로 읽히는 데
+# 필요한 것은 소스 문자셋뿐이다.
+target_compile_options(MyUtils
+    PUBLIC
+        $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/source-charset:utf-8>
+)
 
 target_link_libraries(MyUtils PUBLIC concurrentqueue)
 

@@ -48,7 +48,7 @@ namespace MyUtils::Network {
 	inline constexpr std::size_t LARGE_ALLOCATION_THRESHOLD = 16 * 1024;
 
 	static_assert(LARGE_ALLOCATION_THRESHOLD <= DEFAULT_CHUNK_CAPACITY,
-		"threshold가 capacity보다 크면 그 사이 크기를 담을 chunk가 없다");
+		"threshold above capacity leaves in-between sizes with no chunk to hold them");
 
 	// 단일 요청의 절대 상한. 프로토콜 계층의 semantic limit와는 별개다 — 프로토콜을
 	// 거치지 않는 내부 경로(서버가 만드는 브로드캐스트 페이로드 등)가 있으므로
@@ -156,7 +156,7 @@ namespace MyUtils::Network {
 		explicit operator bool() const noexcept { return IsValid(); }
 
 		// 무효 버퍼에 대한 호출은 Reserve 반환값을 확인하지 않았다는 뜻이므로
-		// 계약 위반으로 처리한다(ASSERT_CRASH).
+		// 계약 위반으로 처리한다(MYUTILS_ASSERT).
 		std::byte* WritableData() noexcept;
 
 		std::size_t Capacity() const noexcept { return _capacity; }

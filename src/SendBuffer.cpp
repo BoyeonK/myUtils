@@ -205,10 +205,13 @@ namespace MyUtils::Network {
 	// =======================================================================
 
 	SendBufferChunk::SendBufferChunk(std::size_t capacity)
+		: _capacity(capacity) {
+		// 할당보다 먼저 검사한다. 초기화 리스트에서 할당하면 검사가 그 뒤로 밀린다.
+		MYUTILS_ASSERT(capacity > 0);
+
 		// 기본 초기화다. zero-fill하지 않는다. 내용은 쓰기 전까지 의미가 없다.
-		: _storage(new std::byte[capacity])
-		, _capacity(capacity) {
-		ASSERT_CRASH(capacity > 0);
+		_storage.reset(new std::byte[capacity]);
+
 		GLiveChunkCount.fetch_add(1, std::memory_order_relaxed);
 		GLiveChunkBytes.fetch_add(capacity, std::memory_order_relaxed);
 	}
@@ -233,7 +236,7 @@ namespace MyUtils::Network {
 	}
 
 	void SendBufferChunk::Rewind(std::size_t offset) noexcept {
-		ASSERT_CRASH(offset <= _offset);
+		MYUTILS_ASSERT(offset <= _offset);
 		_offset = offset;
 	}
 
@@ -289,7 +292,7 @@ namespace MyUtils::Network {
 	}
 
 	std::byte* SendBuffer::WritableData() noexcept {
-		ASSERT_CRASH(_chunk != nullptr);
+		MYUTILS_ASSERT(_chunk != nullptr);
 		return _chunk->Begin() + _offset;
 	}
 
@@ -313,8 +316,8 @@ namespace MyUtils::Network {
 	}
 
 	SendView SendBuffer::Commit(std::size_t writeSize) && {
-		ASSERT_CRASH(_chunk != nullptr);
-		ASSERT_CRASH(writeSize <= _capacity);
+		MYUTILS_ASSERT(_chunk != nullptr);
+		MYUTILS_ASSERT(writeSize <= _capacity);
 
 		TryRewind(writeSize);
 
@@ -358,7 +361,7 @@ namespace MyUtils::Network {
 
 			ChunkRef solo = std::make_shared<SendBufferChunk>(capacity);
 			const std::byte* data = solo->Bump(capacity);
-			ASSERT_CRASH(data != nullptr);
+			MYUTILS_ASSERT(data != nullptr);
 			return SendBuffer(std::move(solo), 0, capacity);
 		}
 
@@ -381,7 +384,7 @@ namespace MyUtils::Network {
 		// 갓 Reset된 chunk이고 capacity <= LARGE_ALLOCATION_THRESHOLD <=
 		// DEFAULT_CHUNK_CAPACITY이므로 반드시 성공한다.
 		std::byte* data = _current->Bump(capacity);
-		ASSERT_CRASH(data != nullptr);
+		MYUTILS_ASSERT(data != nullptr);
 		return SendBuffer(_current, 0, capacity);
 	}
 }

@@ -372,7 +372,7 @@ namespace MyUtils::Actors {
 
 		// state가 RUNNING인 동안에는 Finalize가 실행될 수 없으므로 안전하다.
 		Actor* actor = _actor.get();
-		ASSERT_CRASH(actor != nullptr);
+		MYUTILS_ASSERT(actor != nullptr);
 
 		std::size_t processed = 0;
 		for (; processed < budget; ++processed) {
@@ -753,7 +753,7 @@ namespace MyUtils::Actors {
 
 	ActorSystem::ActorSystem(std::size_t workerCount) {
 		// workerCount == 0 이면 Send는 성공하는데 아무도 처리하지 않는 상태가 된다
-		ASSERT_CRASH(workerCount >= 1);
+		MYUTILS_ASSERT(workerCount >= 1);
 
 		_runtime = std::make_shared<ActorRuntime>(workerCount);
 		_runtime->Start();
@@ -765,7 +765,7 @@ namespace MyUtils::Actors {
 	}
 
 	ActorRef ActorSystem::Spawn(std::unique_ptr<Actor> actor) {
-		ASSERT_CRASH(actor != nullptr);
+		MYUTILS_ASSERT(actor != nullptr);
 
 		if (!_runtime->IsAccepting())
 			return ActorRef{};

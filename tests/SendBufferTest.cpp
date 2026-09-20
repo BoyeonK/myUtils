@@ -404,7 +404,7 @@ int main() {
         std::printf("  utilization    : %.1f%% (committed/reserved)\n",
             100.0 * double(stats.committedBytes) / double(stats.reservedBytes));
     }
-    std::printf("  live chunks    : %zu개 / %zu bytes (pool idle %zu)\n",
+    std::printf("  live chunks    : %zu / %zu bytes (pool idle %zu)\n",
         LiveChunkCount(), LiveChunkBytes(), PoolIdleCountApprox());
 
     std::printf("\n%s  (%d checks, %d failures)\n",

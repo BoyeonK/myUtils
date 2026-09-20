@@ -453,7 +453,7 @@ static void TestActorMigratesBetweenWorkers() {
         std::lock_guard<std::mutex> guard(stats->threadIdLock);
         distinct = stats->threadIds.size();
     }
-    std::printf("  실행된 worker 수: %zu\n", distinct);
+    std::printf("  workers used   : %zu\n", distinct);
     // 통계적 성격의 유일한 테스트다. 400회 재스케줄에서 한 worker만 잡을 확률은 낮다.
     CHECK(distinct >= 2);
 }
@@ -520,7 +520,7 @@ static void TestStopSendRace() {
         totalAccepted += accepted.load();
     }
 
-    std::printf("  %d회 반복, 누적 accept %d건\n", ITERATIONS, totalAccepted);
+    std::printf("  %d iterations, %d accepted in total\n", ITERATIONS, totalAccepted);
 }
 
 static void TestSendAfterShutdownRejected() {
@@ -612,7 +612,7 @@ static void TestShutdownWithPendingWork() {
         // Actor 단위 직렬화는 shutdown 중에도 유지되어야 한다
         CHECK(stats->concurrentViolations.load() == 0);
     }
-    std::printf("  종료 전까지 처리된 메시지: %d건\n", handledTotal);
+    std::printf("  messages handled before stop: %d\n", handledTotal);
 }
 
 static void TestSelfSendFromHandler() {
@@ -727,7 +727,7 @@ static void TestWorkStealingBalancesLoad() {
         threadCount = stats->threadIds.size();
     }
     CHECK(threadCount >= 2);
-    std::printf("  처리 worker 수 : %zu\n", threadCount);
+    std::printf("  workers that processed: %zu\n", threadCount);
 }
 
 static void TestInjectionFromExternalThread() {
@@ -800,8 +800,8 @@ static void TestInjectionNotStarvedByLocalWork() {
     // 주기 확인이 없으면 PILE을 전부 비운 뒤에야(= PILE) 처리된다.
     const int pileProgress = observerStats->sum.load();
     CHECK(pileProgress < PILE / 2);
-    std::printf("  local %d건 중 %d건 시점에 injection 처리됨 (주기 %zu)\n",
-        PILE, pileProgress, INJECTION_POLL_INTERVAL);
+    std::printf("  injection handled after %d of %d local items (interval %zu)\n",
+        pileProgress, PILE, INJECTION_POLL_INTERVAL);
 
     CHECK(WaitUntil([&] { return pileStats->handled.load() == PILE; }, 10000));
 }
@@ -848,27 +848,27 @@ static void PrintStats() {
     std::printf("\n--- actor stats ---\n");
     std::printf("  send           : accepted %llu / rejected %llu\n",
         (unsigned long long)s.sendAccepted, (unsigned long long)s.sendRejected);
-    std::printf("  schedule       : %llu (시스템 종료로 취소 %llu)\n",
+    std::printf("  schedule       : %llu (cancelled by shutdown %llu)\n",
         (unsigned long long)s.scheduleCount,
         (unsigned long long)s.scheduleAbortedSystemStopping);
-    std::printf("  batch          : %llu회, 메시지 %llu건\n",
+    std::printf("  batch          : %llu runs, %llu messages\n",
         (unsigned long long)s.runCount, (unsigned long long)s.messagesHandled);
     if (s.runCount > 0) {
-        std::printf("  배치당 평균    : %.2f건 (budget %zu)\n",
+        std::printf("  avg per batch  : %.2f (budget %zu)\n",
             double(s.messagesHandled) / double(s.runCount),
             DEFAULT_MESSAGE_BUDGET);
-        std::printf("  큐 대기 평균   : %.1f us\n",
+        std::printf("  avg queue wait : %.1f us\n",
             double(s.queueWaitUsTotal) / double(s.runCount));
     }
-    std::printf("  actor          : spawn %llu / finalize %llu / handler 예외 %llu\n",
+    std::printf("  actor          : spawn %llu / finalize %llu / handler exceptions %llu\n",
         (unsigned long long)s.spawnCount, (unsigned long long)s.finalizeCount,
         (unsigned long long)s.handlerExceptionCount);
-    std::printf("  worker sleep   : %llu회\n", (unsigned long long)s.workerSleepCount);
+    std::printf("  worker sleep   : %llu\n", (unsigned long long)s.workerSleepCount);
 
     // --- 스케줄러 라우팅 ---
     const unsigned long long pushTotal = s.localPushCount + s.injectionPushCount;
     if (pushTotal > 0) {
-        std::printf("  runnable 라우팅: local %llu / injection %llu (local %.1f%%)\n",
+        std::printf("  runnable route : local %llu / injection %llu (local %.1f%%)\n",
             (unsigned long long)s.localPushCount,
             (unsigned long long)s.injectionPushCount,
             100.0 * double(s.localPushCount) / double(pushTotal));
