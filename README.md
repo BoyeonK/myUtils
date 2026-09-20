@@ -24,7 +24,9 @@
 |---|---|---|
 | 송신 버퍼 | `MyUtils/SendBuffer.h` | thread-local bump allocator와 참조 카운트 chunk를 이용해 비동기 송신 데이터의 수명을 관리한다. `Reserve` → `Commit`으로 쓰기 영역을 불변 `SendView`로 전환한다. |
 | Actor Runtime | `MyUtils/Actor.h` | MPSC mailbox, atomic 상태 머신, worker-local deque와 work stealing을 갖춘 경량 Actor 실행 환경이다. Actor별 message handler 실행을 직렬화한다. |
-| 계측 | `MyUtils/Profiling.h` | 재빌드 없이 튜닝 가정을 검증할 수 있도록 송신 버퍼와 Actor Runtime의 통계를 제공한다. 메시지 단위의 비교적 비싼 계측만 런타임에 켜고 끌 수 있다. |
+
+두 구성 요소 모두 자기 계측을 갖고 있으며 각자의 공개 헤더에서 `SnapshotStats()`로
+조회한다. 비용이 chunk당 또는 배치당이라 항상 켜져 있고, 켜고 끄는 스위치는 없다.
 
 라이브러리에는 애플리케이션 진입점이나 범용 스레드 관리 프레임워크가 없다. 각 구성 요소의
 구체적인 계약과 제약은 공개 헤더 및 [`design/`](design/) 문서를 기준으로 한다.
@@ -127,11 +129,7 @@ player.Send(std::move(move));
 
 ```cpp
 #include <MyUtils/Actor.h>
-#include <MyUtils/Profiling.h>
 #include <MyUtils/SendBuffer.h>
-
-// 메시지마다 시계를 읽는 상세 계측이 필요할 때만 활성화한다.
-MyUtils::SetProfilingEnabled(true);
 
 // 측정할 workload를 실행한 뒤 통계를 조회한다.
 auto actorStats = MyUtils::Actors::SnapshotStats();
@@ -156,11 +154,13 @@ ctest --test-dir build -C Debug --output-on-failure
 - [`AGENTS.md`](AGENTS.md): Codex가 저장소에 진입할 때 읽는 안내
 - [`CLAUDE.md`](CLAUDE.md): 모든 코딩 에이전트가 공유하는 현재 프로젝트 문맥과 작업 규칙
 - [`design/`](design/): 여러 파일에 걸친 실행 규약과 컴포넌트 설계
-- [`design/adr/`](design/adr/): 채택한 결정, 검토한 대안, 재검토 조건의 기록
 - [`design/OPEN_QUESTIONS.md`](design/OPEN_QUESTIONS.md): 아직 결정하지 못한 설계 문제
 - [`progress.md`](progress.md): 완료 이력과 바로 착수할 수 있는 후속 작업
 
-코드 변경은 관련 계약과 ADR을 먼저 확인하고, 구현 후 해당 invariant를 검증하는 테스트를
+**"왜 그렇게 정했는가"는 저장하지 않는다.** 기록하는 것은 현재 동작과 "무엇을 건드리면
+깨지는가"뿐이며, 전자는 코드 주석과 `design/`에, 후자는 그 옆에 함께 둔다.
+
+코드 변경은 관련 계약을 먼저 확인하고, 구현 후 해당 invariant를 검증하는 테스트를
 실행하는 흐름을 따른다. README에는 오래 유지되는 프로젝트 목적과 사용법만 적고, 수시로
 바뀌는 진행 상태와 미결정 문제는 각각 [`progress.md`](progress.md)와
 [`design/OPEN_QUESTIONS.md`](design/OPEN_QUESTIONS.md)에서 관리한다.

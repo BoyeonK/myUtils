@@ -10,13 +10,14 @@
 1. **각 항목은 그것만 읽고 판단할 수 있어야 한다.** 배경을 "위에서 말했듯이"로 생략하지 말 것.
 2. **의견에는 날짜와 주체를 남긴다.** `- (2026-09-15, Claude Opus 5) ...` 형식.
    서명 없는 주장은 나중에 온 사람이 신뢰도를 판단할 수 없다.
-3. **`design/adr/`에 있는 것은 이미 결정된 사안이다.** 다시 논쟁하지 말 것.
-   정말 뒤집어야 한다면 여기에 **그 ADR을 명시한 새 질문**을 열어라.
+3. **이미 코드와 문서에 반영된 동작은 결정된 사안이다.** 새로운 근거 없이 다시
+   논쟁하지 말 것.
 4. **`Blocked on: 측정`인 항목은 의견을 더 쌓지 말 것.** 숫자가 없으면 결론이 안 난다.
    할 수 있는 일은 "무엇을 측정할지"를 더 정확하게 만드는 것뿐이다.
-5. **결론이 나면 ADR을 쓰고 여기서는 지운다.** `Status`를 `Resolved → ADR-00XX`로
-   바꾼 뒤 다음 정리 때 삭제한다. 이 파일은 누적 로그가 아니다.
-6. **질문이 무효화되면 ADR 없이 지운다.** 대상이 재작성되거나 전제가 깨져서 물음
+5. **결론이 나면 그 결정을 코드 주석이나 `design/*.md`의 현재 동작 서술로 직접
+   반영하고 여기서는 지운다.** 별도의 결정 기록 문서를 만들지 않는다.
+   이 파일은 누적 로그가 아니다.
+6. **질문이 무효화되면 그냥 지운다.** 대상이 재작성되거나 전제가 깨져서 물음
    자체가 사라진 경우다. 단 **무효가 된 이유는 반드시 다른 곳에 남긴다** —
    해당 코드가 재작성 대상이라는 사실은 `CLAUDE.md`에, 할 일로 남는 부분은
    `progress.md`에 옮긴다. 그래야 다음 사람이 같은 질문을 다시 열지 않는다.
@@ -34,27 +35,13 @@
 ## 번호
 
 한 번 쓴 번호는 재사용하지 않는다. 지워진 질문 자리는 비워둔다 — 과거 논의나 커밋
-메시지가 그 번호를 가리키고 있을 수 있기 때문이다. 현재 비어 있는 번호:
+메시지가 그 번호를 가리키고 있을 수 있기 때문이다.
 
-- **Q-001** (SendBuffer 튜닝 값 세 개) — 2026-09-15 해결.
-  64 KB / 16 KB / 64로 확정했다. 이 allocator의 목적 정의와 함께
-  [ADR-0008](adr/0008-baseline-tuning-policy.md)에 있다.
-- **Q-002** (ChunkRef를 intrusive refcount로 바꿀 것인가) — 2026-09-15 해결.
-  `shared_ptr`을 유지하기로 했다. 기록은 [ADR-0003](adr/0003-chunk-lifetime-shared-ptr.md)의
-  "후속" 절에 있다. 병목임이 확인되면 그때 다시 연다.
-- **Q-003** (브로드캐스트·coalescing pinning 대응) — 2026-09-15 해결.
-  standalone 경로를 두지 않기로 했다. [ADR-0007](adr/0007-no-standalone-path-for-pinning.md) 참조.
-- **Q-006** (WorkerContext 도입 여부) — 2026-09-15 해결.
-  도입하지 않기로 했다. [ADR-0009](adr/0009-parts-not-framework.md) 참조 —
-  앞으로의 모든 부품을 구속하는 규칙이 아니라는 점이 문서에 명시되어 있다.
-- **Q-008** (worker-local deque의 알림 정책), **Q-009** (worker loop의 큐 확인
-  순서와 injection 기아) — 2026-09-15 해결.
-  Q-008은 "유휴 worker가 있을 때만 notify", Q-009는 "61회마다 injection을 먼저 확인"으로
-  정했다. 두 큐의 notify 성격이 다르다는 것(injection은 correctness, local은 heuristic)이
-  판단의 핵심이다. [ADR-0014](adr/0014-work-stealing-scheduler.md) 참조.
-- **Q-004** (ObjectPool TLS 소멸 순서), **Q-005** (Actor 메시지 전달 경로 할당),
-  **Q-007** (`Actor::_messageCount`의 의도) — 2026-09-15 무효.
-  대상 코드(`Actor`, `ObjectPool`)를 재작성하기로 하고 저장소에서 제거했다.
+**Q-001 ~ Q-009는 전부 닫혔다.** 각 결론은 해당 코드의 주석과 `CLAUDE.md`,
+`design/actor-runtime.md`의 현재 동작 서술에 반영되어 있으므로 여기에 다시 적지 않는다.
+Q-004·Q-005·Q-007은 대상 코드가 저장소에서 제거되어 무효가 된 경우다.
+
+다음 질문은 **Q-011**부터 쓴다.
 
 ---
 
@@ -65,11 +52,11 @@
 - Status: Open
 - Opened: 2026-09-15
 - Blocked on: Actor 간 공정성 semantics 결정
-- Affects: ADR-0014, `design/actor-runtime.md`의 worker loop와 알려진 제약
+- Affects: `design/actor-runtime.md`의 스케줄러 구조·worker loop와 알려진 제약
 
-ADR-0014는 worker local deque의 owner가 뒤쪽에서 LIFO로 꺼내고 thief가 앞쪽에서
-FIFO로 훔치도록 정했다. 최근 생성된 작업의 locality를 높이고 여러 worker가 있을 때 오래된
-작업을 thief가 분산하는 구조다. 동시에 `ActorSystem(workerCount)`은 `workerCount == 1`도
+현재 worker local deque는 owner가 뒤쪽에서 LIFO로 꺼내고 thief가 앞쪽에서 FIFO로
+훔친다. 최근 생성된 작업의 locality를 높이고 여러 worker가 있을 때 오래된 작업을
+thief가 분산하는 구조다. 동시에 `ActorSystem(workerCount)`은 `workerCount == 1`도
 공식 지원한다.
 
 단일 worker에서는 다음 실행이 가능하다.
@@ -87,13 +74,12 @@ FIFO로 훔치도록 정했다. 최근 생성된 작업의 locality를 높이고
 결정해야 할 것은 **Actor Runtime이 runnable Actor의 eventual execution을 보장하는가**다.
 
 - 보장하지 않는다면 local LIFO starvation을 알려진 제약으로 명시한다.
-- 보장한다면 ADR-0014를 명시적으로 재검토해 bounded fairness 조건과 이를 검증할
-  테스트를 정한다.
+- 보장한다면 bounded fairness 조건과 이를 검증할 테스트를 정하고 스케줄러를 고친다.
 
 **이 질문을 닫는 조건:** 저장소 소유자가 Actor 간 eventual execution 보장 여부를
-결정하고, 결론을 ADR 및 실행 규약에 반영한다.
+결정하고, 결론을 `design/actor-runtime.md`의 실행 규약에 반영한다.
 
-새 질문을 열 때는 위 참여 규칙을 따르고, 번호는 **Q-011**부터 쓴다.
+새 질문을 열 때는 위 참여 규칙을 따른다.
 `## Q-011 제목` 아래에 `Status` / `Opened` / `Blocked on` / `Affects`를 적고,
 **"무엇이 이 질문을 닫는가"를 반드시 포함할 것.** 그게 없으면 의견만 쌓이고
 결론이 나지 않는다.

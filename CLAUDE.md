@@ -6,11 +6,12 @@ This file is the single source of shared project context and working rules for c
 
 `MyUtils`는 게임 서버류 애플리케이션의 런타임 기반 요소를 제공하는 C++17 정적 라이브러리(CMake 타겟 `MyUtils::MyUtils`)다. 실행 파일은 없고, 다른 프로젝트에서 `add_subdirectory` / `FetchContent`로 가져와 `target_link_libraries(... MyUtils::MyUtils)`로 링크해 쓴다.
 
-현재 구성 요소는 셋이다.
+현재 구성 요소는 둘이다.
 
 * **송신 버퍼** (`SendBuffer.h`) — thread-local bump allocator + refcounted chunk. 완성된 컴포넌트다.
-* **Actor Runtime** (`Actor.h`) — MPSC mailbox + atomic 상태 머신 + worker pool. 스케줄러는 **global injection queue + worker-local work-stealing deque**다. 실행 규약은 `design/actor-runtime.md`, 근거는 ADR-0010~0012와 0014.
-* **계측** (`Profiling.h`) — 비용 3단 구분. 1·2단은 항상 켜져 있고 3단만 `SetProfilingEnabled()`로 제어한다(ADR-0013). ADR들이 정한 재검토 조건을 재빌드 없이 관측하기 위한 것이다.
+* **Actor Runtime** (`Actor.h`) — MPSC mailbox + atomic 상태 머신 + worker pool. 스케줄러는 **global injection queue + worker-local work-stealing deque**다. 실행 규약은 `design/actor-runtime.md`.
+
+둘 다 자기 계측을 갖고 있다. `MyUtils::Network::SnapshotStats()` / `MyUtils::Actors::SnapshotStats()`로 조회하며, 두 테스트 실행 파일이 종료 시 요약을 출력한다. 비용은 전부 chunk당 또는 배치당이라 항상 켜져 있다 — 런타임 스위치가 없다.
 
 액터/메시지 시스템, 오브젝트 풀, MPSC 큐, 타이머 스케줄러, `ThreadManager`, 그리고 전역 변수 일체를 **2026-09-15에 전부 제거했다.** 전면 재작성 대상이었고, 그 위에 무언가를 쌓는 것보다 비우고 다시 세우는 편이 낫다는 판단이었다. 필요하면 git 히스토리(`2ce7019` 이전)에서 참고할 수 있다.
 
@@ -46,9 +47,11 @@ Codex 또는 Claude 세션을 시작했다는 사실만으로 workflow에 진입
 
 ### 성능과 계측
 
-성능 관련 변경은 가능하면 실제 측정 결과를 근거로 한다. ADR이나 설계 문서의 baseline
-값을 최적값으로 간주하지 않으며, 재검토 조건이 있다면 그 조건이 실제로 충족됐는지 먼저
-확인한다.
+성능 관련 변경은 가능하면 실제 측정 결과를 근거로 한다. 문서와 주석에 적힌 정책 상수는
+**측정에서 나온 최적값이 아니라 baseline**이므로 그렇게 취급한다.
+
+구현 수단을 고를 때는 **검증된 라이브러리 → mutex 기반 → 직접 작성한 lock-free** 순으로
+검토한다. 세 번째 칸은 측정 근거가 있을 때만 연다.
 
 ### 범위 관리
 
@@ -62,7 +65,7 @@ Codex 또는 Claude 세션을 시작했다는 사실만으로 workflow에 진입
 **지금 있는 것들은 어느 스레드에서 불려도 동작한다.** 스레드를 만들거나 관리하는 코드가
 라이브러리에 아예 없고, 생 `std::thread`에서 정상 동작하는 것이 테스트로 검증되어 있다.
 전역 변수와 `thread_local` 전역도 하나도 없다. 지향은 프레임워크보다 **부품 모음**
-쪽이다(ADR-0009).
+쪽이다.
 
 그래서 새 코드를 쓸 때 이 방식을 **먼저 검토한다.**
 
@@ -72,9 +75,8 @@ Codex 또는 Claude 세션을 시작했다는 사실만으로 workflow에 진입
 * 전역 변수를 되살리기 전에 한 번 더 생각한다. 전역은 곧 "누가 언제 초기화하는가"를 만든다.
 
 **단, 이게 절대 규칙은 아니다.** 스레드 관리 주체에 묶여야만 성립하는 컴포넌트가
-실제로 필요해지면 그때 판단하면 된다 — ADR-0009는 그런 상황을 미리 막아둔 문서가
-아니다. 다만 그건 **명시적으로 내려야 할 결정**이므로, 슬쩍 도입하지 말고
-`design/OPEN_QUESTIONS.md`에 질문을 열 것.
+실제로 필요해지면 그때 판단하면 된다. 다만 그건 **명시적으로 내려야 할 결정**이므로,
+슬쩍 도입하지 말고 `design/OPEN_QUESTIONS.md`에 질문을 열 것.
 
 ## 빌드
 
@@ -103,44 +105,32 @@ lint 단계와 install 규칙은 없다.
 | **여러 파일에 걸친 시퀀스·상태표·락 규칙**           | `design/<컴포넌트>.md`         |
 | 지금 여기서 작업하려면 알아야 할 것 (현재 상태, 규칙, 함정) | **이 파일**                   |
 | 정형화된 AI 개발 workflow의 단계와 실행 규칙       | `workflow.md`              |
-| 왜 이 모양으로 정했고 무엇을 검토했다 버렸는가           | `design/adr/`              |
 | **아직 정하지 못한 것**                      | `design/OPEN_QUESTIONS.md` |
 | 완료 이력, 착수 가능한 TODO                   | `progress.md`              |
 
-설계 또는 구현 작업을 시작하기 전에는 다음 순서로 필요한 문맥을 확인한다.
+**이 레포는 "왜 그렇게 정했는가"를 보관하지 않는다.** 기록하는 것은 **지금 무엇이
+어떻게 동작하는가**와 **무엇을 건드리면 깨지는가**뿐이다. 검토했다 버린 대안, 당시의
+판단 근거, 미래의 재검토 조건은 남기지 않는다.
+
+그래서 변경할 때 **읽어야 할 문서가 적다.** 대신 현재 동작을 바꿀 때는 그 동작을
+서술한 주석과 문서를 같은 변경에서 함께 고쳐야 한다 — 뒤에서 맞춰줄 이력 문서가 없다.
+
+설계 또는 구현 작업을 시작하기 전에는 다음 순서로 문맥을 확인한다.
 
 1. `design/OPEN_QUESTIONS.md`에서 아직 결정되지 않은 문제가 있는지 확인한다.
 2. `progress.md`에서 현재 결정 대기 항목과 바로 착수 가능한 작업을 확인한다.
-3. 수정 대상 컴포넌트의 `design/*.md`와 관련 ADR에서 현재 실행 규약과 확정된 결정의
-   근거를 확인한다.
-
-모든 ADR을 매번 읽을 필요는 없다. 현재 작업과 관련된 문서만 선택하되, 관련 여부가
-불분명하면 문서 목록과 링크를 먼저 확인한다.
+3. 수정 대상 컴포넌트의 코드 주석과 `design/*.md`에서 현재 실행 규약을 확인한다.
 
 컴포넌트 스펙(`design/actor-runtime.md`)에는 **"현재 동작 서술"을 통째로 옮기지 않는다.**
 그게 가장 잘 낡는다. 한 파일 안에서 설명되는 규칙은 코드 주석에 두고, 파일을 넘나드는
 시퀀스만 스펙에 둔다. 스펙의 각 invariant는 자신을 검증하는 테스트 이름을 달아
 드리프트를 막는다.
 
-ADR은 **그 시점의 결정을 박제한 기록**이라 고치지 않는다. Accepted ADR은 새로운 근거나
-명시적인 재검토 요청 없이 다시 논의하지 않는다. 결정이 바뀌면 새 ADR을 쓰고 기존
-문서의 `Status`를 `Superseded by ADR-00XX`로 바꾼다. 설계 근거를 이 파일에 옮겨 적지
-말 것 — 그러면 CLAUDE.md가 낡기 시작한다.
-
-기존 결정에 문제가 있다고 판단되면 ADR을 조용히 덮어쓰지 말고 다음 중 어느 경우인지
-구분한다.
-
-* 구현이 기존 결정과 어긋남
-* 기존 결정의 전제가 더 이상 성립하지 않음
-* 새로운 측정 결과가 재검토 조건을 충족함
-* 완전히 새로운 요구사항이 생김
-
-필요하면 새로운 Open Question 또는 superseding ADR을 제안한다.
-
 `design/OPEN_QUESTIONS.md`는 여러 세션이 같은 문서를 보고 이어서 논의하는 공간이다.
-참여 규칙(서명·날짜, 측정 대기 항목에 의견 쌓지 않기, ADR 재논쟁 금지)은 파일 상단을
-따른다. `progress.md` TODO와의 경계는 "오늘 바로 착수할 수 있는가"다 — 먼저 골라야 할
-게 있으면 OPEN_QUESTIONS 쪽이다.
+참여 규칙(서명·날짜, 측정 대기 항목에 의견 쌓지 않기)은 파일 상단을 따른다.
+결론이 나면 그 결정을 **코드 주석이나 `design/*.md`의 현재 동작 서술로 직접 반영하고**
+질문은 지운다. `progress.md` TODO와의 경계는 "오늘 바로 착수할 수 있는가"다 — 먼저
+골라야 할 게 있으면 OPEN_QUESTIONS 쪽이다.
 
 ## 인코딩 (중요)
 
@@ -165,19 +155,15 @@ PUBLIC이다.
 
 ## 아키텍처
 
-### 계측 (`Profiling.h`)
+### 계측
 
-ADR들이 "이 조건이 관측되면 재검토한다"고 달아둔 조건을 **재빌드 없이** 판정하기 위한 것이다. 비용 기준 3단으로 나뉜다(ADR-0013).
+각 컴포넌트가 자기 계측을 갖는다. 조회는 `MyUtils::Network::SnapshotStats()`,
+`MyUtils::Actors::SnapshotStats()`, `LiveChunkCount()`, `LiveChunkBytes()`,
+`PoolIdleCountApprox()`다. 두 테스트 실행 파일이 종료 시 요약을 출력한다.
 
-| 단                   | 빈도                 | 상태                      |
-| ------------------- | ------------------ | ----------------------- |
-| 1단 — chunk·actor 수명 | chunk/actor당       | **항상 켜짐**               |
-| 2단 — 배치·runnable    | 배치당 (메시지당 1/32 이하) | **항상 켜짐**               |
-| 3단 — 메시지 단위 시계 읽기   | 메시지당 clock 2회      | `SetProfilingEnabled()` |
-
-* **새 지표를 추가할 때 기준은 "메시지당 clock을 읽는가"다.** 그렇다면 3단, 아니면 항상 켠다. 빈도가 낮은 것까지 끄면 정작 운영 중에 볼 수 없다.
-* `#ifdef`로 가르지 않는 이유는 ADR-0013에 있다. 요약하면 꺼졌을 때 이득이 1ns 미만인데 빌드 구성이 둘로 늘고 컴파일되지 않는 코드가 썩는다.
-* 조회는 `MyUtils::Network::SnapshotStats()`, `MyUtils::Actors::SnapshotStats()`, `LiveChunkBytes()`, `MaxChunkLifetimeUs()`. 두 테스트 실행 파일이 종료 시 요약을 출력한다.
+* **전부 항상 켜져 있고 끄는 스위치가 없다.** 지금 있는 지표의 비용이 증가 연산이거나 chunk·배치당 clock 1회라, 메시지당으로 환산하면 묻히기 때문이다.
+* **새 지표를 추가할 때 기준은 "메시지당 clock을 읽는가"다.** 그렇다면 넣지 말 것 — 꼭 필요하면 켜고 끄는 수단을 함께 설계해야 한다. 지금은 그런 지표가 없어서 스위치도 없다.
+* 구현은 자가 등록 `thread_local` 블록이다. 생성자가 레지스트리에 등록하고 소멸자가 누적값을 접어 넣으므로, 어느 스레드에서 쓰이든 동작하고 스레드가 죽어도 값을 잃지 않는다.
 
 ### Actor Runtime (`Actor.h` / `ActorRuntime.cpp`)
 
@@ -193,7 +179,7 @@ ADR들이 "이 조건이 관측되면 재검토한다"고 달아둔 조건을 **
 * `Stop()`은 graceful stop이 아니다. pending 메시지를 버린다.
 * Registry를 순회하며 `Finalize`하지 말 것. `Finalize`가 스스로를 unregister하므로 스냅샷을 만든 뒤 락 밖에서 처리한다.
 
-**스케줄러는 global injection queue(MPMC) + worker-local deque + work stealing이다.** 2026-09-15에 단일 global queue baseline에서 교체했다. 구조와 정책은 `design/actor-runtime.md`의 "스케줄러 구조" 절, 근거는 ADR-0014에 있다. 두 정책 상수는 **측정값이 아니라 baseline**이므로 임의로 바꾸지 말고 `SnapshotStats()`로 문제를 먼저 확인할 것.
+**스케줄러는 global injection queue(MPMC) + worker-local deque + work stealing이다.** 구조와 정책은 `design/actor-runtime.md`의 "스케줄러 구조" 절에 있다. 두 정책 상수는 **측정값이 아니라 baseline**이므로 임의로 바꾸지 말고 `SnapshotStats()`로 문제를 먼저 확인할 것.
 
 * `INJECTION_POLL_INTERVAL`(61) — 몇 번에 한 번 injection을 local보다 먼저 보는가. 없으면 local deque가 차 있는 동안 injection이 굶는다.
 * `DEFAULT_MESSAGE_BUDGET`(32) — **위 값과 상호작용한다.** 한 번의 local 처리가 최대 32건이라 injection 확인 간격은 최악의 경우 메시지 1,952건이다. 한쪽을 바꾸면 다른 쪽의 의미도 바뀐다.
@@ -209,14 +195,15 @@ Reserve(capacity) → SendBuffer (이동 전용, mutable)
                   → Commit(actualSize) → SendView (복사 가능, immutable)
 ```
 
-**왜 이 모양인지, 무엇을 검토했다 버렸는지는 `design/adr/`에 있다(0001~0008).** 여기에는 작업 시 반드시 지켜야 할 것만 적는다.
+**용도가 한정된 allocator다.** 실시간 통신의 빈번한 I/O hot path에서 작은~중간 크기 송신 버퍼를 빠르게 할당하는 것이 목적이고, **느린 peer가 `SendView`를 오래 붙잡아 생기는 memory pinning 최소화는 목표가 아니다.** 그래서 pinning을 줄이려고 chunk 크기를 낮추는 변경을 넣지 말 것 — 필요하면 상위 session 정책에서 대응한다. 자세한 것은 `SendBuffer.h` 상단.
 
 * **`SendBufferManager`의 Current Chunk 참조를 없애지 말 것.** 이 참조가 있어야 "refcount == 0"이 "아무도 이 chunk를 모른다"와 같은 뜻이 된다. 없으면 마지막 I/O가 끝나는 순간 사용 중인 chunk가 pool로 반환되어 두 worker가 같은 chunk에 동시에 bump allocation한다.
 * **chunk 소유권 이전은 반드시 ChunkPool을 경유할 것.** `_offset`이 비동기화 상태로 안전한 근거가 pool 큐의 happens-before다. worker 사이에서 chunk를 직접 넘기는 최적화를 넣는 순간 깨진다.
 * **`Reserve` 반환값을 반드시 확인할 것.** 크기 0 또는 `MAX_SEND_BUFFER_SIZE` 초과면 무효 버퍼가 돌아온다. 확인 없이 쓰면 `WritableData()`/`Commit()`에서 죽는다.
 * tail reclaim은 LIFO 조건에서만 동작한다. 뒤에 다른 할당이 끼면 회수되지 않는 게 **정상**이다.
+* **`Reserve`는 정렬 올림을 하지 않는다.** byte serialization 전용 저장소이며, placement new로 typed object를 만드는 용도가 아니다.
 * 계측(`SnapshotStats`)은 살아 있는 thread의 카운터를 잠금 없이 읽는 의도된 benign race다. 정확한 값이 필요하면 대상 thread를 join한 뒤 읽는다.
 
-정책 상수는 전부 튜닝 값이며 correctness와 무관하다. 현재 값(chunk 64 KB, large 임계 16 KB, pool 유휴 64)은 **최적값이 아니라 합의된 baseline policy**이고, 근거와 재검토 조건은 ADR-0008에 있다. 임의로 바꾸지 말고 `SnapshotStats()`로 문제를 먼저 확인할 것.
+정책 상수는 전부 튜닝 값이며 correctness와 무관하다. 현재 값(chunk 64 KB, large 임계 16 KB, pool 유휴 64)은 **최적값이 아니라 baseline**이다. 임의로 바꾸지 말고 `SnapshotStats()`로 문제를 먼저 확인할 것.
 
 특히 **`LARGE_ALLOCATION_THRESHOLD`를 `DEFAULT_CHUNK_CAPACITY`와 같게 맞추지 말 것.** 전자는 "current chunk를 교체시킬 만큼 큰 요청인가"를 판정하는 정책값이고 후자는 저장 공간 크기라, 의미가 다르다. 같게 두면 20~30 KB 요청 하나가 64 KB chunk를 갈아치우며 남은 공간을 통째로 버린다.

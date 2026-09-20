@@ -3,29 +3,9 @@
 구현자가 참고하는 **실행 규약**이다. 파일 하나만 봐서는 알 수 없는 것 — 여러 타입에
 걸친 시퀀스, 상태표, 락 규칙 — 만 여기에 둔다.
 
-- **왜 이 구조인가**는 [ADR-0010](adr/0010-actor-ownership-and-lifetime.md),
-  [ADR-0011](adr/0011-actor-scheduling-and-serialization.md),
-  [ADR-0012](adr/0012-actor-stop-failure-shutdown.md)에 있다.
-- 한 파일 안에서 끝나는 규칙은 그 코드 옆 주석에 둔다.
+한 파일 안에서 끝나는 규칙은 그 코드 옆 주석에 둔다.
 
-## 범위
-
-1차 구현은 **correctness 확보까지**였고, 스케줄링 구조는 그 다음이었다. 둘 다 끝났다.
-
-| 1차 | 2차 |
-|---|---|
-| Message / Actor / Mailbox / ControlBlock | worker-local work-stealing deque |
-| 상태 머신, lost wakeup 방지 | global queue를 injection queue로 축소 |
-| 단일 global runnable queue | work stealing |
-| shutdown, correctness test | 큐별 알림 정책, 큐 확인 순서 |
-
-첫 구현의 진짜 위험은 scheduling throughput이 아니라 lifetime과 상태 전이의
-correctness였다. 단일 큐로 semantics를 먼저 검증한 뒤 scheduler를 교체했다.
-
-남은 튜닝 항목(batch/quantum, steal victim 선택)은 **측정 후 판단**이며
-ADR-0014의 "Revisit when"에 조건이 적혀 있다.
-
-### 스케줄러 구조
+## 스케줄러 구조
 
 ```
                     Global Injection Queue
@@ -48,7 +28,8 @@ ADR-0014의 "Revisit when"에 조건이 적혀 있다.
 | Worker Local Runnable | **work-stealing deque** | owner는 `push_bottom`/`pop_bottom`, thief는 `steal_top` |
 
 local deque는 worker당 `std::mutex` + `std::deque`다. 근거와 Chase-Lev를 쓰지 않은
-이유는 ADR-0014에 있다.
+이유는 경합 제거의 본체가 락을 1개에서 N개로 쪼개는 것이고, 스케줄러
+연산이 이미 배치(32건)당 1회라 뮤텍스 비용이 묻히기 때문이다.
 
 **어디에 넣는지의 기준은 locality다.**
 
@@ -75,7 +56,7 @@ owner가 LIFO로 최근 work를 처리하고 thief가 반대쪽 오래된 work�
 
 **61회 주기가 없으면 injection이 굶는다.** local deque를 채우는 것은 handler가 만든
 runnable이고, 그게 꾸준한 워크로드에서는 외부 스레드·I/O completion의 runnable이
-무한정 밀린다. `61`은 최적값이 아니라 baseline이다(ADR-0014).
+무한정 밀린다. `61`은 최적값이 아니라 baseline이다.
 
 한 번의 local 처리가 최대 32건(budget)이므로 **injection 확인 간격은 최악의 경우
 메시지 1,952건이다.** 둘 중 하나를 바꾸면 다른 쪽의 의미도 바뀐다.
@@ -157,7 +138,7 @@ SCHEDULED 중복 진입.
 `IDLE → SCHEDULED`를 CAS로 단일화하는 것이 runnable 큐 중복 등록을 **구조적으로**
 막는다. 큐에 같은 ACB가 두 번 들어갈 경로 자체가 없다.
 
-원자 연산은 1차 구현에서 전부 `seq_cst`를 쓴다(ADR-0011).
+원자 연산은 전부 `seq_cst`다.
 
 ---
 
@@ -265,7 +246,7 @@ worker가 아직 구간에 들어오지 않았다면 재확인 시점에 push가
 묶이면 그 일은 A가 풀려날 때까지 멈춘다.
 
 비용은 잠들기 직전에만 드는 O(worker 수) 스캔이다. hot path가 아니지만 worker 수가
-커지면 재검토 대상이다(ADR-0014).
+커지면 재검토 대상이다.
 
 ### 유지해야 할 invariant
 
@@ -519,4 +500,4 @@ public:
   별도 API로 추가한다 — `Stop`에 drain 의미를 섞지 않는다.
 - **메시지마다 동적 할당이 발생한다.** `unique_ptr<Message>`의 대가다. correctness
   우선 1차 구현으로 수용하며, hot path로 확인되면 value/variant, pooled, inline
-  type-erased 중에서 교체한다(ADR-0011).
+  type-erased 중에서 교체한다.

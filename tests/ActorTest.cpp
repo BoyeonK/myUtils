@@ -4,7 +4,6 @@
 // 테스트 이름은 그 표와 일치해야 한다. 이름을 바꾸면 스펙도 같이 고칠 것.
 
 #include "MyUtils/Actor.h"
-#include "MyUtils/Profiling.h"
 
 #include <atomic>
 #include <chrono>
@@ -70,7 +69,7 @@ static bool WaitUntil(Pred pred, int timeoutMs = 5000) {
 // ---------------------------------------------------------------------------
 // 공용 메시지 / 관측 객체
 //
-// ACB가 Actor를 unique 소유하고 Finalize에서 파괴하므로(ADR-0010), 테스트는
+// ACB가 Actor를 unique 소유하고 Finalize에서 파괴하므로, 테스트는
 // Actor 내부를 직접 들여다볼 수 없다. 관측값은 외부 객체에 기록한다.
 // ---------------------------------------------------------------------------
 
@@ -242,7 +241,7 @@ private:
 };
 
 // ---------------------------------------------------------------------------
-// 2차 스케줄러용 (ADR-0014)
+// 스케줄러 라우팅 테스트용
 // ---------------------------------------------------------------------------
 
 // handler 안에서 여러 액터에게 뿌린다. worker 스레드에서 Send하므로 만들어지는
@@ -689,7 +688,7 @@ static void TestHandlerExceptionStopsActor() {
 }
 
 // ---------------------------------------------------------------------------
-// 2차 스케줄러 (ADR-0014)
+// 스케줄러 — work stealing, injection, 라우팅 격리
 // ---------------------------------------------------------------------------
 
 static void TestWorkStealingBalancesLoad() {
@@ -719,19 +718,16 @@ static void TestWorkStealingBalancesLoad() {
     // local deque로 라우팅되었는가
     CHECK(after.localPushCount > before.localPushCount);
 
-    // 실제로 훔쳐갔는가 — 이게 핵심이다
-    CHECK(after.stealSuccessCount > before.stealSuccessCount);
-
-    // 한 worker가 다 처리하지 않았다
+    // 한 worker가 다 처리하지 않았다 = 나머지가 훔쳐갔다는 뜻이다.
+    // 48건이 전부 한 worker의 local deque로 들어갔으므로, 다른 worker가
+    // 처리한 것이 있다면 steal 말고는 경로가 없다.
     std::size_t threadCount = 0;
     {
         std::lock_guard<std::mutex> guard(stats->threadIdLock);
         threadCount = stats->threadIds.size();
     }
     CHECK(threadCount >= 2);
-    std::printf("  처리 worker 수 : %zu, steal 성공 %llu회\n",
-        threadCount,
-        (unsigned long long)(after.stealSuccessCount - before.stealSuccessCount));
+    std::printf("  처리 worker 수 : %zu\n", threadCount);
 }
 
 static void TestInjectionFromExternalThread() {
@@ -844,36 +840,6 @@ static void TestCrossRuntimeIsolation() {
     systemB.Shutdown();
 }
 
-static void TestProfilingFlagGatesMailboxProbe() {
-    Section("ProfilingFlagGatesMailboxProbe");
-
-    ActorSystem system(2);
-    auto stats = std::make_shared<Stats>();
-    ActorRef actor = system.Spawn(std::make_unique<CountingActor>(stats));
-
-    // 꺼진 상태에서는 3단 프로브가 전혀 누적되지 않아야 한다
-    MyUtils::SetProfilingEnabled(false);
-    CHECK(!MyUtils::IsProfilingEnabled());
-
-    const std::uint64_t lockedBefore = SnapshotStats().mailboxLockCount;
-    for (int i = 0; i < 300; ++i)
-        CHECK(actor.Send(std::make_unique<IntMessage>(1)));
-    CHECK(WaitUntil([&] { return stats->handled.load() == 300; }));
-    CHECK(SnapshotStats().mailboxLockCount == lockedBefore);
-
-    // 켜면 누적된다
-    MyUtils::SetProfilingEnabled(true);
-    for (int i = 0; i < 300; ++i)
-        CHECK(actor.Send(std::make_unique<IntMessage>(1)));
-    CHECK(WaitUntil([&] { return stats->handled.load() == 600; }));
-    CHECK(SnapshotStats().mailboxLockCount > lockedBefore);
-
-    // 1·2단은 플래그와 무관하게 항상 누적된다
-    CHECK(SnapshotStats().messagesHandled >= 600);
-
-    MyUtils::SetProfilingEnabled(false);
-}
-
 // ---------------------------------------------------------------------------
 
 static void PrintStats() {
@@ -888,11 +854,9 @@ static void PrintStats() {
     std::printf("  batch          : %llu회, 메시지 %llu건\n",
         (unsigned long long)s.runCount, (unsigned long long)s.messagesHandled);
     if (s.runCount > 0) {
-        std::printf("  배치당 평균    : %.2f건 (budget %zu, 소진 %llu회 = %.1f%%)\n",
+        std::printf("  배치당 평균    : %.2f건 (budget %zu)\n",
             double(s.messagesHandled) / double(s.runCount),
-            DEFAULT_MESSAGE_BUDGET,
-            (unsigned long long)s.budgetExhaustedCount,
-            100.0 * double(s.budgetExhaustedCount) / double(s.runCount));
+            DEFAULT_MESSAGE_BUDGET);
         std::printf("  큐 대기 평균   : %.1f us\n",
             double(s.queueWaitUsTotal) / double(s.runCount));
     }
@@ -901,29 +865,13 @@ static void PrintStats() {
         (unsigned long long)s.handlerExceptionCount);
     std::printf("  worker sleep   : %llu회\n", (unsigned long long)s.workerSleepCount);
 
-    // --- 2차 스케줄러 (ADR-0014) ---
+    // --- 스케줄러 라우팅 ---
     const unsigned long long pushTotal = s.localPushCount + s.injectionPushCount;
     if (pushTotal > 0) {
         std::printf("  runnable 라우팅: local %llu / injection %llu (local %.1f%%)\n",
             (unsigned long long)s.localPushCount,
             (unsigned long long)s.injectionPushCount,
             100.0 * double(s.localPushCount) / double(pushTotal));
-    }
-    if (s.localPushCount > 0) {
-        std::printf("  notify 생략    : %llu회 (local push의 %.1f%%)\n",
-            (unsigned long long)s.notifySkippedCount,
-            100.0 * double(s.notifySkippedCount) / double(s.localPushCount));
-    }
-    if (s.stealAttemptCount > 0) {
-        std::printf("  work stealing  : %llu/%llu 성공 (%.1f%%)\n",
-            (unsigned long long)s.stealSuccessCount,
-            (unsigned long long)s.stealAttemptCount,
-            100.0 * double(s.stealSuccessCount) / double(s.stealAttemptCount));
-    }
-    if (s.mailboxLockCount > 0) {
-        std::printf("  mailbox 대기   : 평균 %.2f us (%llu회 측정, 3단)\n",
-            double(s.mailboxWaitUsTotal) / double(s.mailboxLockCount),
-            (unsigned long long)s.mailboxLockCount);
     }
 }
 
@@ -946,7 +894,6 @@ int main() {
     TestInjectionFromExternalThread();
     TestInjectionNotStarvedByLocalWork();
     TestCrossRuntimeIsolation();
-    TestProfilingFlagGatesMailboxProbe();
 
     PrintStats();
 

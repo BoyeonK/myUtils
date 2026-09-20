@@ -15,12 +15,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_library(MyUtils STATIC
     src/SendBuffer.cpp
     src/ActorRuntime.cpp
-    src/Profiling.cpp
 
     include/MyUtils/SendBuffer.h
     include/MyUtils/Actor.h
     include/MyUtils/Assert.h
-    include/MyUtils/Profiling.h
 )
 
 # 소스와 헤더는 전부 UTF-8이다. MSVC는 기본적으로 시스템 코드 페이지(한국어

@@ -406,11 +406,6 @@ int main() {
     }
     std::printf("  live chunks    : %zu개 / %zu bytes (pool idle %zu)\n",
         LiveChunkCount(), LiveChunkBytes(), PoolIdleCountApprox());
-    if (stats.chunkDestroyCount > 0) {
-        std::printf("  chunk 고정시간 : 평균 %.1f us / 최대 %llu us\n",
-            double(stats.chunkLifetimeUsTotal) / double(stats.chunkDestroyCount),
-            (unsigned long long)MaxChunkLifetimeUs());
-    }
 
     std::printf("\n%s  (%d checks, %d failures)\n",
         GFailCount == 0 ? "ALL PASS" : "FAILED", GCheckCount, GFailCount);

@@ -1,6 +1,5 @@
 #include "MyUtils/Actor.h"
 #include "MyUtils/Assert.h"
-#include "MyUtils/Profiling.h"
 
 #include <algorithm>
 #include <atomic>
@@ -63,7 +62,6 @@ namespace MyUtils::Actors {
 			dst.scheduleAbortedSystemStopping += src.scheduleAbortedSystemStopping;
 			dst.runCount += src.runCount;
 			dst.messagesHandled += src.messagesHandled;
-			dst.budgetExhaustedCount += src.budgetExhaustedCount;
 			dst.queueWaitUsTotal += src.queueWaitUsTotal;
 			dst.spawnCount += src.spawnCount;
 			dst.finalizeCount += src.finalizeCount;
@@ -71,11 +69,6 @@ namespace MyUtils::Actors {
 			dst.workerSleepCount += src.workerSleepCount;
 			dst.localPushCount += src.localPushCount;
 			dst.injectionPushCount += src.injectionPushCount;
-			dst.notifySkippedCount += src.notifySkippedCount;
-			dst.stealAttemptCount += src.stealAttemptCount;
-			dst.stealSuccessCount += src.stealSuccessCount;
-			dst.mailboxLockCount += src.mailboxLockCount;
-			dst.mailboxWaitUsTotal += src.mailboxWaitUsTotal;
 		}
 
 		class ThreadStatsBlock {
@@ -109,7 +102,7 @@ namespace MyUtils::Actors {
 		}
 
 		// =======================================================================
-		// worker 신원 (ADR-0014)
+		// worker 신원
 		//
 		//   EnqueueRunnable이 "지금 이 스레드가 이 런타임의 몇 번 worker인가"를
 		//   알아야 local deque로 보낼 수 있다. TrySchedule은 ACB 깊은 곳에서
@@ -157,34 +150,6 @@ namespace MyUtils::Actors {
 				duration_cast<microseconds>(steady_clock::now().time_since_epoch()).count());
 		}
 
-		// 계측 3단 프로브를 단 mailbox 락.
-		//
-		// 플래그가 꺼져 있으면 clock을 읽지 않으므로 평범한 lock_guard와 같다.
-		// 꺼졌을 때 비용은 relaxed load 한 번과 예측되는 분기뿐이다. ADR-0013
-		class TimedMailboxLock {
-		public:
-			explicit TimedMailboxLock(std::mutex& mailboxLock) : _lock(&mailboxLock) {
-				if (!IsProfilingEnabled()) {
-					_lock->lock();
-					return;
-				}
-
-				const std::uint64_t begin = NowUs();
-				_lock->lock();
-
-				ActorStats& stats = Stats();
-				stats.mailboxLockCount += 1;
-				stats.mailboxWaitUsTotal += NowUs() - begin;
-			}
-
-			~TimedMailboxLock() { _lock->unlock(); }
-
-			TimedMailboxLock(const TimedMailboxLock&) = delete;
-			TimedMailboxLock& operator=(const TimedMailboxLock&) = delete;
-
-		private:
-			std::mutex* _lock = nullptr;
-		};
 	}
 
 	ActorStats SnapshotStats() {
@@ -232,7 +197,7 @@ namespace MyUtils::Actors {
 		std::atomic<ActorState> _state{ ActorState::IDLE };
 		std::atomic<bool> _finalizeStarted{ false };
 
-		// 계측 2단. runnable 등록 시각. 큐 대기 시간을 재는 데 쓴다.
+		// 계측용 runnable 등록 시각. 큐 대기 시간을 재는 데 쓴다.
 		// 등록한 thread가 쓰고 worker가 읽는다. 순서는 큐가 보장한다.
 		std::atomic<std::uint64_t> _enqueuedAtUs{ 0 };
 	};
@@ -264,7 +229,7 @@ namespace MyUtils::Actors {
 
 		// runnable을 만드는 유일한 경로다. **어느 큐에 넣을지 고르는 일까지**
 		// 여기서 한다. 큐를 직접 건드리는 경로를 만들면 그 경로에서만 worker가
-		// 깨지 않는다. ADR-0011, ADR-0014
+		// 깨지 않는다.
 		bool EnqueueRunnable(std::shared_ptr<ActorControlBlock> cb);
 
 		// accepting 확인과 Registry 등록을 같은 락 아래에서 선형화한다.
@@ -284,9 +249,9 @@ namespace MyUtils::Actors {
 		//   owner  : push_bottom / pop_bottom (LIFO — locality)
 		//   thief  : steal_top               (FIFO — 가장 오래된 것부터)
 		//
-		// Chase-Lev lock-free가 아니라 뮤텍스인 이유는 ADR-0014에 있다.
-		// 요약하면 경합 제거의 본체는 락을 1개에서 N개로 쪼개는 것이고,
-		// 스케줄러 연산은 이미 배치(32건)당 1회라 뮤텍스 비용이 묻힌다.
+		// Chase-Lev lock-free가 아니라 뮤텍스다. 경합 제거의 본체는 락을 1개에서
+		// N개로 쪼개는 것이고, 스케줄러 연산은 이미 배치(32건)당 1회라 뮤텍스
+		// 비용이 묻힌다.
 		struct LocalDeque {
 			std::mutex lock;
 			std::deque<Runnable> items;
@@ -314,7 +279,7 @@ namespace MyUtils::Actors {
 		// [필수] 증감은 반드시 _sleepLock 안에서 한다. 락 밖에서 세면 producer가
 		// 0을 읽고 notify를 건너뛴 직후 worker가 잠드는 창이 생긴다. 락 안에서
 		// 세면 "producer가 0을 읽었다"가 "수면 영역에 들어와 있는 worker가 없다"와
-		// 같은 뜻이 된다. ADR-0014
+		// 같은 뜻이 된다.
 		std::atomic<std::size_t> _idleCount{ 0 };
 
 		std::atomic<bool> _stopping{ false };
@@ -340,7 +305,7 @@ namespace MyUtils::Actors {
 		{
 			// acceptance gate. Stop도 같은 락 안에서 STOPPING으로 전이하므로
 			// "Stop 이후 accept" 여부가 락 획득 순서 하나로 결정된다.
-			TimedMailboxLock guard(_mailboxLock);
+			std::lock_guard<std::mutex> guard(_mailboxLock);
 
 			const ActorState state = _state.load();
 			if (state != ActorState::STOPPING && state != ActorState::DEAD) {
@@ -368,7 +333,7 @@ namespace MyUtils::Actors {
 	void ActorControlBlock::Stop() {
 		ActorState prev = _state.load();
 		{
-			TimedMailboxLock guard(_mailboxLock);
+			std::lock_guard<std::mutex> guard(_mailboxLock);
 
 			// [주의] prev를 load 후 store하면 안 된다. IDLE -> SCHEDULED 전이는
 			// 이 락 밖에서 일어나므로, 그 사이에 producer가 SCHEDULED로 바꾸고
@@ -398,7 +363,7 @@ namespace MyUtils::Actors {
 			return;
 		}
 
-		// 계측 2단. 배치당 clock 1회.
+		// 계측. 배치당 clock 1회라 메시지당으로 환산하면 묻힌다.
 		ActorStats& stats = Stats();
 		stats.runCount += 1;
 		const std::uint64_t enqueuedAtUs = _enqueuedAtUs.load(std::memory_order_relaxed);
@@ -413,7 +378,7 @@ namespace MyUtils::Actors {
 		for (; processed < budget; ++processed) {
 			MessagePtr message;
 			{
-				TimedMailboxLock guard(_mailboxLock);
+				std::lock_guard<std::mutex> guard(_mailboxLock);
 
 				// [consumption boundary] Stop은 이 락을 쥔 채 STOPPING을 쓴다.
 				// 따라서 락을 통과한 Stop은 반드시 여기서 보이고, 그 이후로는
@@ -422,7 +387,7 @@ namespace MyUtils::Actors {
 				//
 				// 이 검사가 없으면 Stop은 state만 바꿀 뿐 worker는 여전히 이 루프
 				// 안이므로, pending 메시지를 budget 한도까지 계속 처리한다 —
-				// "Stop은 pending을 버린다"는 계약과 정면으로 어긋난다. ADR-0012
+				// "Stop은 pending을 버린다"는 계약과 정면으로 어긋난다.
 				if (_state.load() != ActorState::RUNNING)
 					break;
 
@@ -440,7 +405,7 @@ namespace MyUtils::Actors {
 			}
 			catch (...) {
 				// handler가 던졌다면 Actor state가 부분적으로만 바뀌었을 수 있다.
-				// 다음 메시지를 계속 처리하지 않고 격리한다. ADR-0012
+				// 다음 메시지를 계속 처리하지 않고 격리한다.
 				stats.handlerExceptionCount += 1;
 				message.reset();   // 락 밖 파괴 (L4)
 				Stop();
@@ -451,10 +416,6 @@ namespace MyUtils::Actors {
 
 			// message는 여기서 락 밖에서 파괴된다 (L4)
 		}
-
-		// budget을 다 썼다면 DEFAULT_MESSAGE_BUDGET이 작다는 신호일 수 있다
-		if (processed == budget)
-			stats.budgetExhaustedCount += 1;
 
 		ActorState running = ActorState::RUNNING;
 		if (!_state.compare_exchange_strong(running, ActorState::IDLE)) {
@@ -481,7 +442,7 @@ namespace MyUtils::Actors {
 
 		std::deque<MessagePtr> drained;
 		{
-			TimedMailboxLock guard(_mailboxLock);
+			std::lock_guard<std::mutex> guard(_mailboxLock);
 			drained.swap(_mailbox);   // 락 안에서는 swap만
 		}
 
@@ -518,7 +479,7 @@ namespace MyUtils::Actors {
 	}
 
 	bool ActorControlBlock::MailboxEmpty() {
-		TimedMailboxLock guard(_mailboxLock);
+		std::lock_guard<std::mutex> guard(_mailboxLock);
 		return _mailbox.empty();
 	}
 
@@ -537,7 +498,7 @@ namespace MyUtils::Actors {
 			return false;
 
 		// [라우팅] 이 스레드가 "이 런타임의" worker인가. runtime 비교가 빠지면
-		// ActorSystem이 둘 이상일 때 남의 deque로 샌다. ADR-0014
+		// ActorSystem이 둘 이상일 때 남의 deque로 샌다.
 		const WorkerIdentity& self = CurrentWorker();
 		if (self.runtime == this) {
 			{
@@ -554,10 +515,8 @@ namespace MyUtils::Actors {
 			//
 			// 읽기는 반드시 push "이후"여야 한다. 그래야 여기서 0을 보고 건너뛴
 			// 경우에 뒤이어 잠드는 worker의 재확인이 이 push를 반드시 본다.
-			if (_idleCount.load() == 0) {
-				Stats().notifySkippedCount += 1;
+			if (_idleCount.load() == 0)
 				return true;
-			}
 
 			{
 				std::lock_guard<std::mutex> guard(_sleepLock);
@@ -603,9 +562,7 @@ namespace MyUtils::Actors {
 		if (_workerCount <= 1)
 			return false;
 
-		Stats().stealAttemptCount += 1;
-
-		// victim 선택은 단순 순회다. 최적화하지 않았다(ADR-0014 Uncertainty).
+		// victim 선택은 단순 순회다. 최적화하지 않았다.
 		for (std::size_t offset = 1; offset < _workerCount; ++offset) {
 			LocalDeque& victim = *_local[(index + offset) % _workerCount];
 
@@ -616,8 +573,6 @@ namespace MyUtils::Actors {
 			// steal_top: owner가 집는 쪽의 반대편. 가장 오래된 것부터 가져간다.
 			out = std::move(victim.items.front());
 			victim.items.pop_front();
-
-			Stats().stealSuccessCount += 1;
 			return true;
 		}
 
@@ -627,7 +582,7 @@ namespace MyUtils::Actors {
 	bool ActorRuntime::NextRunnable(std::size_t index, std::size_t tick, Runnable& out) {
 		// [Q-009] 주기적으로 injection을 먼저 본다. 이게 없으면 local deque가
 		// 계속 차 있는 동안 injection을 한 번도 확인하지 않아 외부 스레드와
-		// I/O completion의 runnable이 무한정 밀린다. ADR-0014
+		// I/O completion의 runnable이 무한정 밀린다.
 		if (tick % INJECTION_POLL_INTERVAL == 0) {
 			if (_injection.try_dequeue(out))
 				return true;
@@ -655,7 +610,7 @@ namespace MyUtils::Actors {
 	}
 
 	void ActorRuntime::WorkerLoop(std::size_t index) {
-		// 진입할 때 스스로 신원을 세팅한다. 외부 초기화 훅이 없다. ADR-0014
+		// 진입할 때 스스로 신원을 세팅한다. 외부 초기화 훅이 없다.
 		WorkerScope scope(this, index);
 
 		for (std::size_t tick = 0;; ++tick) {
@@ -673,7 +628,7 @@ namespace MyUtils::Actors {
 				return;
 
 			// 유휴 선언은 sleep 락 안에서. 락 밖에서 세면 producer가 0을 읽고
-			// notify를 건너뛴 직후 잠드는 창이 생긴다. ADR-0014
+			// notify를 건너뛴 직후 잠드는 창이 생긴다.
 			_idleCount.fetch_add(1);
 
 			// [재확인 범위] 자기 deque / injection / 남의 deque를 전부 본다.

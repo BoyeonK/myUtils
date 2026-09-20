@@ -3,7 +3,6 @@
 
 #include <algorithm>
 #include <atomic>
-#include <chrono>
 #include <mutex>
 #include <utility>
 #include <vector>
@@ -44,8 +43,6 @@ namespace MyUtils::Network {
 			dst.largeAllocCount += src.largeAllocCount;
 			dst.chunkAcquireCount += src.chunkAcquireCount;
 			dst.chunkCreateCount += src.chunkCreateCount;
-			dst.chunkDestroyCount += src.chunkDestroyCount;
-			dst.chunkLifetimeUsTotal += src.chunkLifetimeUsTotal;
 		}
 
 		// 생성자가 등록하고 소멸자가 누적값을 접어 넣는다.
@@ -82,13 +79,6 @@ namespace MyUtils::Network {
 
 		std::atomic<std::size_t> GLiveChunkCount{ 0 };
 		std::atomic<std::size_t> GLiveChunkBytes{ 0 };
-		std::atomic<std::uint64_t> GMaxChunkLifetimeUs{ 0 };
-
-		std::uint64_t NowUs() noexcept {
-			using namespace std::chrono;
-			return static_cast<std::uint64_t>(
-				duration_cast<microseconds>(steady_clock::now().time_since_epoch()).count());
-		}
 	}
 
 	SendBufferStats SnapshotStats() {
@@ -109,10 +99,6 @@ namespace MyUtils::Network {
 		return GLiveChunkBytes.load(std::memory_order_relaxed);
 	}
 
-	std::uint64_t MaxChunkLifetimeUs() noexcept {
-		return GMaxChunkLifetimeUs.load(std::memory_order_relaxed);
-	}
-
 	// =======================================================================
 	// ChunkPool
 	//
@@ -120,7 +106,7 @@ namespace MyUtils::Network {
 	//
 	//   [주의] chunk deleter가 pool의 소유권 지분을 캡처한다. pool이 자기가 내준
 	//   chunk 전부보다 오래 살아야 반환이 안전하기 때문이다. 이 캡처를 없애면
-	//   종료 시점에 이미 파괴된 pool로 반환하는 경로가 생긴다. ADR-0004
+	//   종료 시점에 이미 파괴된 pool로 반환하는 경로가 생긴다.
 	//
 	//   유휴 chunk는 raw 포인터로만 보관하므로 순환 참조는 생기지 않는다.
 	// =======================================================================
@@ -225,25 +211,11 @@ namespace MyUtils::Network {
 		ASSERT_CRASH(capacity > 0);
 		GLiveChunkCount.fetch_add(1, std::memory_order_relaxed);
 		GLiveChunkBytes.fetch_add(capacity, std::memory_order_relaxed);
-		_createdAtUs = NowUs();
 	}
 
 	SendBufferChunk::~SendBufferChunk() {
 		GLiveChunkCount.fetch_sub(1, std::memory_order_relaxed);
 		GLiveChunkBytes.fetch_sub(_capacity, std::memory_order_relaxed);
-
-		// 계측 1단. chunk당 1회라 빈도가 낮다.
-		const std::uint64_t lifetimeUs = NowUs() - _createdAtUs;
-
-		SendBufferStats& stats = Stats();
-		stats.chunkDestroyCount += 1;
-		stats.chunkLifetimeUsTotal += lifetimeUs;
-
-		std::uint64_t observedMax = GMaxChunkLifetimeUs.load(std::memory_order_relaxed);
-		while (lifetimeUs > observedMax &&
-			!GMaxChunkLifetimeUs.compare_exchange_weak(observedMax, lifetimeUs,
-				std::memory_order_relaxed)) {
-		}
 	}
 
 	void SendBufferChunk::Reset() noexcept {
@@ -328,7 +300,9 @@ namespace MyUtils::Network {
 		// 두 조건은 서로 다른 것을 증명하므로 둘 다 필요하다. 하나만 빼도 깨진다.
 		//   1. Current == 내 chunk : 내가 owner다. _offset을 써도 레이스가 없다
 		//   2. 커서 == 내 끝        : 내 뒤에 할당이 없다. 남의 영역을 안 침범한다
-		// 왜 1번이 owner임을 "증명"하는지는 ADR-0005 참고.
+		// 1번이 owner임을 증명하는 이유는 chunk가 한 시점에 최대 하나의 manager에게만
+		// Current일 수 있기 때문이다 — manager가 참조를 들고 있어 Pool이 다른 worker
+		// 에게 내줄 수 없다. 그래서 thread id 비교도 atomic도 필요 없다.
 		if (SendBufferManager::Current().CurrentChunk().get() != _chunk.get())
 			return;
 		if (_chunk->Offset() != _offset + _capacity)
