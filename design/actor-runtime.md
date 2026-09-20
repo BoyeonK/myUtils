@@ -136,7 +136,8 @@ SCHEDULED 중복 진입.
 `IDLE → SCHEDULED`를 CAS로 단일화하는 것이 runnable 큐 중복 등록을 **구조적으로**
 막는다. 큐에 같은 ACB가 두 번 들어갈 경로 자체가 없다.
 
-원자 연산은 전부 `seq_cst`다.
+**상태 전이의 원자 연산은 전부 `seq_cst`다.** 계측 카운터나 runnable 등록 시각처럼
+correctness에 관여하지 않는 값은 `relaxed`를 쓴다.
 
 ---
 
@@ -384,10 +385,9 @@ Finalize 이후 ACB는 살아 있을 수 있다 — `ActorRef`나 runnable 큐�
 1. ActorSystem accepting = false        Registry 락 안에서 설정, Spawn 등록과 선형화
 2. Scheduler stopping = true            sleep 락 안에서 설정 후 notify_all
 3. 모든 worker join                      실행 중인 Handler 완료 대기
-4. 남은 runnable 큐 discard
-5. Registry 스냅샷 → 락 밖에서 전부 Finalize
+4. 남은 runnable discard             injection과 worker local deque 전부
+5. Registry 스냅샷 → 락 밖에서 전부 Stop 후 Finalize
 6. Registry clear
-7. Scheduler 참조 해제
 ```
 
 **5번의 스냅샷이 필수다.** Finalize가 registry unregister를 하므로, registry를 순회하며
@@ -400,9 +400,14 @@ Finalize하면 같은 뮤텍스 재획득(데드락) 또는 iterator 무효화�
 
 ```
 { lock(registry); snapshot.assign(registry.begin(), registry.end()); }
-for (acb : snapshot) acb->Finalize();          ← 락 밖
+for (acb : snapshot) { acb->Stop(); acb->Finalize(); }   ← 락 밖
 { lock(registry); registry.clear(); }
 ```
+
+**`Stop()`을 먼저 부르는 것이 `Finalize()`만 부르는 것보다 강하다.** `Finalize`는 state를
+바로 `DEAD`로 쓰지만 그 전까지는 `Send`가 accept될 수 있고, `Stop`은 mailbox 락 안에서
+`STOPPING`으로 전이해 그 창을 닫는다. `Finalize`는 once gate가 있어 `Stop`이 이미
+수행했더라도 안전하다.
 
 3번 이후에는 worker가 더 이상 Actor를 실행하지 않으므로 Finalize가 단순해진다.
 
@@ -432,7 +437,8 @@ public:
 
 class ActorRef {
 public:
-    bool IsValid() const;
+    bool IsValid() const noexcept;
+    explicit operator bool() const noexcept;
     bool Send(MessagePtr message) const;   // true = accepted (delivery 보장 아님)
     void Stop() const;                     // 즉시 중단. pending 메시지 discard
 };
@@ -441,8 +447,10 @@ class ActorSystem {
 public:
     explicit ActorSystem(std::size_t workerCount);   // workerCount >= 1 강제
     ~ActorSystem();                                   // Shutdown 포함
-    ActorRef Spawn(std::unique_ptr<Actor> actor);
+    [[nodiscard]] ActorRef Spawn(std::unique_ptr<Actor> actor);
     void Shutdown();
+    std::size_t WorkerCount() const noexcept;
+    std::size_t LiveActorCount() const;              // 계측·테스트용
 };
 ```
 
