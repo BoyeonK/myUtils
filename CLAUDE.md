@@ -11,7 +11,7 @@
 | 송신 버퍼 | `include/MyUtils/SendBuffer.h`, `src/SendBuffer.cpp` | [`design/send-buffer.md`](design/send-buffer.md) |
 | Actor Runtime | `include/MyUtils/Actor.h`, `src/ActorRuntime.cpp` | [`design/actor-runtime.md`](design/actor-runtime.md) |
 
-상태 전이표, 락 규칙, 수명·소유권 관계, 정책 상수의 의미, 계측 지표 목록은 전부 위 문서에 있다.
+상태 전이표, 락 규칙, 수명·소유권 관계, 정책 상수의 의미는 전부 위 문서에 있다. 계측 지표 목록은 각 공개 헤더에 있다.
 
 ## 작업 절차
 

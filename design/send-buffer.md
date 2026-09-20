@@ -129,16 +129,11 @@ baseline이다.** 임의로 바꾸지 말고 `SnapshotStats()`로 문제를 먼�
 
 ## O6. 계측
 
-구현은 자가 등록 `thread_local` 블록이다. 생성자가 레지스트리에 등록하고 소멸자가
-누적값을 접어 넣으므로, 어느 thread에서 쓰이든 동작하고 thread가 죽어도 값을 잃지 않는다.
+공통 규약(항상 켜짐, 자가 등록 `thread_local` 패턴, 스냅샷의 benign race)은
+[`instrumentation.md`](instrumentation.md)에 있다. 여기에는 이 컴포넌트 고유의 것만 둔다.
 
-hot path는 자기 thread의 블록만 만지므로 동기화가 없다. 그래서 **`SnapshotStats()`는
-살아 있는 thread의 카운터를 잠금 없이 읽는 의도된 benign race다.** 정확한 값이 필요하면
-대상 thread를 join한 뒤 읽는다.
-
-조회 함수는 `SnapshotStats()`, `LiveChunkCount()`, `LiveChunkBytes()`,
-`PoolIdleCountApprox()`다. 메모리 압력을 볼 때는 전용 chunk의 용량이 제각각이므로
-`LiveChunkCount()`가 아니라 `LiveChunkBytes()`를 쓴다.
+**메모리 압력을 볼 때는 `LiveChunkCount()`가 아니라 `LiveChunkBytes()`를 쓴다.** 전용
+chunk는 용량이 제각각이라 `개수 × DEFAULT_CHUNK_CAPACITY`로 추정하면 부정확하다.
 
 ---
 
