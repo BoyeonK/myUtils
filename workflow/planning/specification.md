@@ -31,6 +31,12 @@ AI는 다음 역할을 수행한다.
 
 최종적으로 무엇이 필요한지는 사용자가 결정한다.
 
+Specification이 도달해야 하는 상태는 다음과 같다.
+
+> Design 단계에서 AI가 사용자 의도를 추측할 필요가 없다.
+
+질문의 개수는 목표가 아니다.
+
 Specification의 결과는 다음 위치에 기록한다.
 
 ```text
@@ -86,25 +92,87 @@ Specification의 Requirement 또는 Constraint에 포함할 수 있다.
 AI는 요구사항을 구체화하기 위해 새로운 가능성이나 질문을 제안할 수 있다.
 
 그러나 사용자가 요구하지 않았고 Project Context에서도 확정되지 않은 내용을
-Requirement 또는 Constraint로 자동 확정하지 않는다.
+Requirement, Constraint, Non-goal 또는 Acceptance Criteria로 자동 확정하지 않는다.
 
 AI가 제안하거나 아직 결정되지 않은 내용은 Workflow의 정보 상태에 따라
 `Proposed` 또는 `Open`으로 구분한다.
+
+baseline에 필요한 항목의 처리는 아래 `사용자 질문`의 출처 확인 규칙을 따른다.
 
 ---
 
 ## 사용자 질문
 
-Specification을 작성하면서 사용자의 판단이 필요한 사항이 발견되면 질문할 수 있다.
+Specification은 사용자의 요구를 확인하는 인터뷰에 가깝다.
 
-질문하기 전에 가능한 범위에서 다음을 확인한다.
+필요한 범위에서 다음을 적극적으로 확인한다.
 
-- 기존 Project Context에서 이미 답을 찾을 수 있는가
-- 실제 Requirement인지 Design 단계에서 결정할 문제인지
-- AI가 불필요하게 선택지를 제한하고 있지는 않은가
-- 사용자가 판단할 수 있도록 선택지와 의미를 충분히 정리할 수 있는가
+- 무엇을 가능하게 만들고 싶은가
+- 어떤 사용 상황을 예상하는가
+- 반드시 보장해야 하는 동작은 무엇인가
+- 허용 가능한 것과 허용하지 않는 것은 무엇인가
+- 실패했을 때 기대하는 동작은 무엇인가
+- 기존 동작 중 반드시 유지해야 하는 것은 무엇인가
+- 이번 작업에서 명시적으로 하지 않을 것은 무엇인가
+- 완료되었다고 판단할 수 있는 조건은 무엇인가
 
-질문은 가능한 한 단순한 찬반 확인보다 **결정해야 할 의미와 선택지**를 보여준다.
+반면 구현 방법의 선택은 Specification에서 사용자에게 떠넘기지 않는다.
+
+어떤 동기화 도구를 사용할지, 어떤 컨테이너나 소유권 표현을 사용할지 같은 결정은 Design의 책임이다.
+
+### 출처 확인
+
+Specification baseline에 포함하는 Requirement, Constraint, Non-goal, Acceptance Criteria는
+각각 출처가 있어야 한다.
+
+출처는 사용자의 발언 또는 Project Context에서 확인된 기존 제약과 결정이다.
+
+baseline에 필요한 항목인데 출처가 없다면
+AI가 임의로 확정하지 않고 사용자에게 질문한다.
+
+반면 현재 작업에 필수적이지 않은 AI의 아이디어는 질문을 강제하지 않는다.
+
+이러한 내용은 `Proposed`로 남기거나 Specification에서 제외한다.
+
+```text
+baseline 항목에 출처가 있는가?
+
+출처 있음
+   → 그대로 사용
+
+출처 없음
+   ├─ baseline에 필요함 → 사용자에게 질문
+   └─ 단순 아이디어     → Proposed 또는 제외
+```
+
+`Proposed` 표시는 확인을 생략하기 위한 수단이 아니다.
+
+baseline에 필요한 항목을 `Proposed`로 표시한 뒤
+사용자 확인 없이 Specification Confirmation의 요약에 포함하지 않는다.
+
+### 질문 형식
+
+질문에는 가능한 한 다음을 함께 제공한다.
+
+- 무엇을 결정해야 하는가
+- 왜 결정이 필요한가
+- 가능한 선택지
+- 각 선택지가 결과를 어떻게 바꾸는가
+- Main AI가 제안하는 기본안
+
+단순한 찬반 확인보다 **결정의 의미와 선택지**를 보여준다.
+
+Main AI의 기본안은 사용자 결정과 구분한다.
+
+사용자 판단이 필요한 사항이 여러 개라면 가능한 한 하나의 묶음으로 함께 제시한다.
+
+### 질문하지 않는 것
+
+다음은 질문하지 않는다.
+
+- 기존 Project Context에서 이미 답을 찾을 수 있는 사항
+- Design 단계에서 결정할 구현 방법
+- Design 선택이나 Acceptance Criteria를 바꾸지 않는 세부 사항
 
 ---
 
@@ -126,6 +194,8 @@ Acceptance Criteria는 구현 완료 여부를 실제로 판단할 수 있어야
 - 주요 제약이 확인되어 있다.
 - Requirement와 Design decision이 가능한 범위에서 분리되어 있다.
 - 완료 여부를 검증할 Acceptance Criteria가 있다.
+- baseline의 각 Requirement, Constraint, Non-goal, Acceptance Criteria에 출처가 있다.
+- Design에서 사용자 의도를 추측해야 하는 항목이 남아 있지 않다.
 - 아직 확정되지 않은 사항이 Open Question으로 드러나 있다.
 
 이 시점의 `spec.md`는 사용자 확인 전 초안이다.

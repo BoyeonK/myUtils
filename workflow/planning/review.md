@@ -119,9 +119,34 @@ Main AI가 임의로 다른 Reviewer나 self-review로 대체하지 않는다.
 
 이 경우 사용자에게 상황을 알리고 다음 처리 방향을 결정한다.
 
+### Reviewer 실행 컨텍스트
+
+각 Review round를 새로운 Reviewer 컨텍스트에서 수행할지,
+같은 Reviewer 컨텍스트를 이어서 사용할지는 아직 확정된 정책이 아니다.
+
+기본값은 round마다 새로운 컨텍스트를 사용하는 방식(`fresh`)이다.
+
+같은 컨텍스트를 이어서 사용하는 방식(`continued`)은 실험 목적으로 선택할 수 있다.
+
+두 방식은 서로 다른 위험을 가진다.
+
+- `fresh`
+  이전 round의 판단 기준이 이어지지 않아 finding이 이동할 수 있다.
+  → `Resolution Criterion` 기록과 재Review 범위 제한으로 완화한다.
+
+- `continued`
+  Reviewer가 자신이 제안한 수정을 검사하게 되어
+  그 수정이 만든 새로운 문제를 발견하기 어려워진다.
+
+어떤 방식을 사용했는지는 진단 기록에 남긴다.
+
+이 선택은 Workflow 상태가 아니므로 `status.md`의 고정 필드에 포함하지 않는다.
+
 ---
 
 ## Reviewer 입력
+
+### 최초 Review
 
 Reviewer는 우선 다음 자료를 중심으로 검토를 시작한다.
 
@@ -137,6 +162,21 @@ Reviewer는 우선 다음 자료를 중심으로 검토를 시작한다.
 불필요하게 Designer의 설계 정당화 과정이나 이전 대화 전체를 제공하지 않는다.
 
 Reviewer가 결과물과 필요한 Project Context를 중심으로 판단하도록 한다.
+
+### 재Review
+
+재Review에서는 Main AI가 다음을 입력 패킷으로 조립해서 전달한다.
+
+- 확정된 `spec.md`
+- 현재 `design.md`
+- 기존 finding 목록 (Severity, Status, `Resolution Criterion` 포함)
+- 이번 round에서 변경된 내용
+- 검토에 필요한 최소한의 Project Context
+
+Reviewer가 Project Context를 처음부터 다시 탐색하지 않도록
+변경 내용과 기존 finding을 명시적으로 전달한다.
+
+이 경우에도 이전 대화 전체나 Main AI의 설계 정당화 과정은 제공하지 않는다.
 
 ---
 
@@ -243,6 +283,43 @@ Severity와 Status는 서로 다른 축이다.
 Severity: Blocking
 Status: Waived
 ```
+
+---
+
+## Finding 기록 형식
+
+각 finding은 **다른 Reviewer나 이후 세션이 단독으로 재검증할 수 있도록** 기록한다.
+
+최소한 다음을 포함한다.
+
+```text
+Finding: F-03
+Severity: Blocking
+Status: Open
+Problem: 무엇이 문제인가
+Risk: 해결되지 않으면 무엇이 발생할 수 있는가
+Resolution Criterion: 무엇이 만족되면 Resolved로 볼 수 있는가
+```
+
+`Resolution Criterion`은 가능한 한 관찰 가능한 조건으로 작성한다.
+
+예:
+
+```text
+Resolution Criterion:
+- X의 수명이 Y보다 길다는 것이 설계상 보장된다.
+- shutdown 이후 callback에서 Z에 접근하지 않는다.
+```
+
+"우려된다", "검토가 필요하다" 수준의 서술은 해결 여부를 판정할 수 없다.
+
+이러한 지적은 판정 가능한 형태로 구체화하거나 Suggestion으로 분류한다.
+
+Finding ID는 같은 작업 안에서 고유하게 유지하고 round가 바뀌어도 재사용하지 않는다.
+
+해결 판정 기준을 Reviewer의 대화 문맥에만 두지 않는다.
+
+기준이 `review.md`에 없으면 그 finding은 재현 가능한 방식으로 검증할 수 없다.
 
 ---
 
@@ -370,23 +447,39 @@ finding을 반영하지 않기로 결정했고 Design도 변경되지 않은 경
 
 ---
 
-## 반복 Review
+## 재Review 범위
 
-재검토는 기본적으로 다음만 대상으로 한다.
+재Review의 목적은 이전 finding의 해결 여부와
+변경으로 새롭게 발생한 중대한 문제를 확인하는 것이다.
 
-- 이전 Review 이후 변경된 Design
-- 기존 Blocking 또는 Important finding
-- 각 finding에 대한 반영 내용
-- 변경으로 인해 새로 발생한 위험
+검토 대상은 다음으로 한정한다.
+
+**범위 안**
+
+- 기존 finding의 `Resolution Criterion` 충족 여부
+- 이번 변경에서 직접 발생한 새로운 위험
+- 변경으로 인해 기존 finding의 판정이 달라지는지
+
+**범위 밖**
+
+- 변경과 무관한 기존 설계 영역에 대한 새로운 일반 비평
+- 이전 round에서 제기되지 않았고 이번 변경과 인과관계가 없는 지적
+
+범위 밖의 지적이 반환된 경우 Main AI는 이를 `review.md`에 out-of-scope로 기록하고
+현재 Review cycle의 처리 대상으로 삼지 않는다.
+
+필요하다고 판단되면 별개의 작업으로 다루거나 사용자에게 제시한다.
+
+out-of-scope finding은 escalation 판정의 "새로운 Blocking 또는 Important finding"에 포함하지 않는다.
+
+이 제한은 round마다 Reviewer의 관점이 달라져 설계가 계속 이동하는 것을 막기 위한 것이다.
 
 Reviewer는 재검토에 필요한 범위만 다시 확인한다.
 
-Design의 핵심 구조나 전제가 크게 변경된 경우에만 전체 Review를 다시 수행한다.
-
-재검토의 목적은 이전 Blocking/Important finding의 해결 여부와
-변경으로 인해 새롭게 발생한 중대한 문제를 확인하는 것이다.
-
 새 Suggestion만 발견된 경우에는 추가 Review cycle을 시작하지 않는다.
+
+Design의 핵심 구조나 전제가 교체된 경우에는
+재Review가 아니라 새로운 Review cycle로 취급한다.
 
 ---
 
@@ -405,6 +498,8 @@ Specification 또는 Design의 핵심 전제가 변경되어
 
 세 번째 이후의 Review round에서 새로운 Open Blocking 또는 Important finding이 발생하면
 추가 Review를 자동으로 계속하지 않는다.
+
+이때 out-of-scope로 기록된 지적은 이 판정에 포함하지 않는다.
 
 Main AI는 남아 있는 finding, 위험, 현재 선택지와 주요 trade-off를 정리해 사용자에게 제시하고
 다음 처리 방향을 결정한다.
@@ -428,6 +523,7 @@ Escalation 이후에도 finding은 `Resolved` 또는 명시적인 `Waived` 상�
 - 남은 결정은 Development에서 처리 가능한 구현 세부사항이다.
 - 남아 있는 trade-off와 Open Question이 명확하다.
 - Waived finding이 있다면 `review.md`와 `status.md`에 기록되어 있다.
+- out-of-scope로 기록된 지적이 있다면 그 처리 방향이 정해져 있다.
 
 ---
 

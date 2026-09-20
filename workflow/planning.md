@@ -139,6 +139,13 @@ Discovery
 
 Planning 내부에는 서로 다른 성격의 사용자 개입이 존재할 수 있다.
 
+### Specification
+
+사용자의 요구를 확인하는 인터뷰에 가깝다.
+
+Design에서 사용자 의도를 추측하지 않아도 되는 상태를 목표로 하며,
+baseline에 필요한데 출처가 없는 항목은 확정하지 않고 질문한다.
+
 ### Specification Confirmation
 
 사용자가 무엇을 필요로 하는지 올바르게 이해했는지 확인한다.
@@ -166,6 +173,7 @@ Specification Confirmation이나 중간 판단을 최종 Approval로 확대 해�
 다음을 만족하면 Planning을 종료하고 Development로 이동한다.
 
 - 사용자가 Specification을 확인했다.
+- Specification baseline에 출처가 확인되지 않은 항목이 없다.
 - Specification을 바탕으로 핵심 기술 설계가 작성되었다.
 - Design Review가 완료되었다.
 - Open 상태의 Blocking finding이 없다.
