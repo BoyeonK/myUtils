@@ -381,3 +381,7 @@ MigrationBackup/
 build/
 out/
 images/portfolio/
+
+# workflow 산출물 (로컬 분석용)
+workflow-analysis/
+.workflow/
